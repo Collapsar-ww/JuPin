@@ -1,0 +1,36 @@
+# Maven build
+target/
+**/target/
+
+# IDE - local only
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# Local AI/tooling
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+
+# Logs
+*.log
+logs/
+
+# Docker
+lima.tar.gz
+
+# Local Lima/tool binaries
+bin/
+libexec/
+share/
+
+# Temp
+tmp/
+temp/
