@@ -8,11 +8,13 @@ import com.jupin.server.mapper.CreditLogMapper;
 import com.jupin.server.mapper.UserMapper;
 import com.jupin.server.service.CreditService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CreditServiceImpl implements CreditService {
@@ -65,9 +67,14 @@ public class CreditServiceImpl implements CreditService {
 
     @Override
     public List<CreditLog> getLog(Long userId, int page, int size) {
-        return creditLogMapper.selectList(new QueryWrapper<CreditLog>()
-                .eq("user_id", userId)
-                .orderByDesc("create_time")
-                .last("LIMIT " + ((long) (page - 1) * size) + "," + size));
+        try {
+            return creditLogMapper.selectList(new QueryWrapper<CreditLog>()
+                    .eq("user_id", userId)
+                    .orderByDesc("create_time")
+                    .last("LIMIT " + ((long) (page - 1) * size) + "," + size));
+        } catch (Exception e) {
+            log.error("getLog error userId={}: ", userId, e);
+            throw new BaseException("查询信用分记录失败: " + e.getMessage());
+        }
     }
 }
