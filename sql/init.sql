@@ -234,7 +234,7 @@ CREATE TABLE `credit_log` (
   CONSTRAINT `fk_credit_user` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='信用分日志';
 
-INSERT INTO `script` (`name`, `type`, `difficulty`, `min_players`, `max_players`, `duration`, `roles`, `price_ref`, `description`) VALUES
-('年轮', '硬核', 2, 4, 6, 240, '[{"name":"侦探","desc":"推理位"}]', 88.00, '硬核推理本'),
-('古木吟', '情感', 2, 5, 6, 240, '[{"name":"瘦小女"},{"name":"冷俊男"}]', 78.00, '情感沉浸本'),
-('拆迁', '欢乐', 1, 6, 8, 180, '[{"name":"包租公"},{"name":"包租婆"}]', 68.00, '欢乐机制本');
+INSERT INTO `script` (`id`, `name`, `type`, `difficulty`, `min_players`, `max_players`, `duration`, `roles`, `price_ref`, `description`, `status`) VALUES
+(1, '接口测试剧本', '硬核', 2, 2, 6, 240, '[{"name":"侦探","desc":"推理位"},{"name":"医生","desc":"辅助位"}]', 100.00, '接口测试用默认剧本', 1),
+(2, '古木吟', '情感', 2, 5, 6, 240, '[{"name":"瘦小女"},{"name":"冷俊男"}]', 78.00, '情感沉浸本', 1),
+(3, '拆迁', '欢乐', 1, 6, 8, 180, '[{"name":"包租公"},{"name":"包租婆"}]', 68.00, '欢乐机制本', 1);
