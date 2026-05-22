@@ -68,6 +68,13 @@ public class ShopPoolController {
         return Result.success();
     }
 
+    @Operation(summary = "取消拼车  🔒")
+    @PostMapping("/{poolId}/cancel")
+    public Result<Void> cancel(@PathVariable Long poolId) {
+        poolService.cancel(BaseContext.getCurrentId(), poolId);
+        return Result.success();
+    }
+
     @Operation(summary = "发起完成确认  🔒")
     @PostMapping("/{poolId}/complete")
     public Result<ConfirmVO> complete(@PathVariable Long poolId) {

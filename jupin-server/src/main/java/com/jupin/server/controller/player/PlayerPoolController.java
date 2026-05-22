@@ -94,6 +94,13 @@ public class PlayerPoolController {
         return Result.success();
     }
 
+    @Operation(summary = "取消拼车  🔒")
+    @PostMapping("/{poolId}/cancel")
+    public Result<Void> cancel(@PathVariable Long poolId) {
+        poolService.cancel(BaseContext.getCurrentId(), poolId);
+        return Result.success();
+    }
+
     @Operation(summary = "通过申请  🔒")
     @PostMapping("/{poolId}/approve/{userId}")
     public Result<Void> approve(@PathVariable Long poolId, @PathVariable Long userId) {
