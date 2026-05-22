@@ -814,3 +814,50 @@ INSERT INTO credit_log (user_id, change, balance, reason, create_time) VALUES (.
 | `jupin-pojo/.../CreditLog.java` | `change` 字段加 `@TableField("`change`")` 转义 MySQL 关键字 |
 | `jupin-server/.../CreditServiceImpl.java` | getLog() 加 try-catch + @Slf4j |
 | `jupin-server/.../application.yml` | 回退全局 column-format |
+
+---
+
+## 日期：2026-05-22（第五段）
+
+### 本轮操作：git 提交、项目收尾
+
+#### 1. Git 提交
+
+将累计修改按语义拆分为 12 个 commit：
+
+```
+feat: 跳车扣信用分，LEFT重入改为UPDATE
+feat: 订单创建校验成员资格，pay()增userId归属校验
+feat: 评价接口增加成员资格和评价对象校验
+feat: 玩家/店家端新增取消拼车接口
+fix: @TableField转义MySQL关键字change
+fix: 群聊成员资格改为MemberStatus.JOINED
+fix: getLog加错误日志包装
+fix: OrderVO新增refundReason字段
+refactor: 硬编码提取为常量类
+chore: 新增常量类
+docs: 更新开发日志
+chore: 更新初始化SQL
+```
+
+#### 2. 当前后端完成状态
+
+| 模块 | 状态 |
+|------|------|
+| 公共认证（注册/登录/刷新/退出） | ✅ 已验证 |
+| 权限隔离（玩家/店家/管理员路由拦截） | ✅ 已验证 |
+| 玩家局主链路（创建→满员→complete→confirm→COMPLETED→finish→FINISHED） | ✅ 已验证 |
+| 审核制玩家局 | ✅ 已验证 |
+| 店家局（店铺/店员/权限/剧本库/发布/指派DM） | ✅ 已验证 |
+| 订单安全（成员资格校验、归属校验） | ✅ 已验证 |
+| 评价校验（成员资格、评价对象、重复评价） | ✅ 已验证 |
+| 取消拼车 + 自动退款 | ✅ 已验证 |
+| 退出/跳车（含人数扣减、FULL回退OPEN） | ✅ 已验证 |
+| 群聊（成员资格、空消息拦截） | ✅ 已验证 |
+| 消息通知 | ✅ 已验证 |
+| 信用分跳车扣减 | ✅ 定向测试 16/0 |
+| 常量抽取（5 个常量类） | ✅ 已完成 |
+
+#### 3. 下一步
+
+**明天直接开始前端构建（Vue 3 + Vant UI）。**
