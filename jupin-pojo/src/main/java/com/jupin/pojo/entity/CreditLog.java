@@ -21,6 +21,7 @@ public class CreditLog {
     private Long id;
 
     private Long userId;            // 用户 ID
+    @TableField("`change`")
     private Integer change;         // 变动值（正加负减，如 -20、+5）
     private Integer balance;        // 变动后余额
     private String reason;          // 原因：跳车扣分/完成加分/好评加分/差评扣分
