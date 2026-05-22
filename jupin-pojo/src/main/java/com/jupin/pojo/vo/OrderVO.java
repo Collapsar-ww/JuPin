@@ -48,6 +48,9 @@ public class OrderVO {
     @Schema(description = "退款时间")
     private LocalDateTime refundTime;
 
+    @Schema(description = "退款原因")
+    private String refundReason;
+
     @Schema(description = "创建时间")
     private LocalDateTime createTime;
 }
