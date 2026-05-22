@@ -3,6 +3,9 @@ package com.jupin.server.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.jupin.common.constant.DbFieldConstant;
+import com.jupin.common.constant.ErrorConstant;
+import com.jupin.common.constant.RedisKeyConstant;
 import com.jupin.common.constant.RoleConstant;
 import com.jupin.common.exception.BaseException;
 import com.jupin.common.utils.JwtUtil;
@@ -30,20 +33,17 @@ public class UserServiceImpl implements UserService {
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedis;
 
-    private static final String BLACKLIST_PREFIX = "jwt:blacklist:";
-    private static final String REFRESH_PREFIX = "refresh:";
-
     @Override
     @Transactional
     public User register(RegisterRequest request) {
-        if (userMapper.selectCount(new QueryWrapper<User>().eq("phone", request.getPhone())) > 0) {
-            throw new BaseException("手机号已注册");
+        if (userMapper.selectCount(new QueryWrapper<User>().eq(DbFieldConstant.PHONE, request.getPhone())) > 0) {
+            throw new BaseException(ErrorConstant.PHONE_REGISTERED);
         }
 
         int roleVal = switch (request.getRole()) {
             case "player" -> RoleConstant.PLAYER;
             case "shop" -> RoleConstant.SHOP;
-            default -> throw new BaseException("角色不合法，仅支持 player/shop");
+            default -> throw new BaseException(ErrorConstant.INVALID_ROLE);
         };
 
         User user = User.builder()
@@ -62,12 +62,12 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public User login(LoginRequest request) {
-        User user = userMapper.selectOne(new QueryWrapper<User>().eq("phone", request.getPhone()));
+        User user = userMapper.selectOne(new QueryWrapper<User>().eq(DbFieldConstant.PHONE, request.getPhone()));
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new BaseException("手机号或密码错误");
+            throw new BaseException(ErrorConstant.ACCOUNT_OR_PASSWORD_ERROR);
         }
         if (user.getStatus() == 0) {
-            throw new BaseException("账号已被禁用");
+            throw new BaseException(ErrorConstant.ACCOUNT_DISABLED);
         }
         user.setLastLoginTime(LocalDateTime.now());
         userMapper.updateById(user);
@@ -77,22 +77,22 @@ public class UserServiceImpl implements UserService {
     @Override
     public void logout(String token) {
         long ttl = 7200000;
-        stringRedis.opsForValue().set(BLACKLIST_PREFIX + token, "1", ttl, TimeUnit.MILLISECONDS);
+        stringRedis.opsForValue().set(RedisKeyConstant.JWT_BLACKLIST_PREFIX + token, "1", ttl, TimeUnit.MILLISECONDS);
     }
 
     @Override
     public String refreshToken(String refreshToken) {
         if (!jwtUtil.validateToken(refreshToken)) {
-            throw new BaseException("RefreshToken无效或已过期");
+            throw new BaseException(ErrorConstant.REFRESH_TOKEN_INVALID);
         }
         Long userId = jwtUtil.getUserIdFromToken(refreshToken);
-        String cached = stringRedis.opsForValue().get(REFRESH_PREFIX + userId);
+        String cached = stringRedis.opsForValue().get(RedisKeyConstant.REFRESH_TOKEN_PREFIX + userId);
         if (cached == null || !cached.equals(refreshToken)) {
-            throw new BaseException("RefreshToken已被吊销");
+            throw new BaseException(ErrorConstant.REFRESH_TOKEN_REVOKED);
         }
 
         User user = userMapper.selectById(userId);
-        if (user == null) throw new BaseException("用户不存在");
+        if (user == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
 
         return jwtUtil.generateAccessToken(userId, user.getPhone(), user.getRole());
     }
@@ -100,7 +100,7 @@ public class UserServiceImpl implements UserService {
     @Override
     public User getCurrentUser(Long userId) {
         User user = userMapper.selectById(userId);
-        if (user == null) throw new BaseException("用户不存在");
+        if (user == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
         return user;
     }
 
@@ -108,7 +108,7 @@ public class UserServiceImpl implements UserService {
     @Transactional
     public User updateUser(Long userId, UserUpdateRequest request) {
         User existing = userMapper.selectById(userId);
-        if (existing == null) throw new BaseException("用户不存在");
+        if (existing == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
         BeanUtil.copyProperties(request, existing, CopyOptions.create().ignoreNullValue());
         userMapper.updateById(existing);
         return existing;

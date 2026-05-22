@@ -1,6 +1,9 @@
 package com.jupin.server.controller.auth;
 
 import cn.hutool.core.bean.BeanUtil;
+import com.jupin.common.constant.ApiPathConstant;
+import com.jupin.common.constant.JwtConstant;
+import com.jupin.common.constant.RedisKeyConstant;
 import com.jupin.common.result.Result;
 import com.jupin.common.utils.JwtUtil;
 import com.jupin.pojo.dto.LoginRequest;
@@ -21,15 +24,13 @@ import java.util.concurrent.TimeUnit;
 
 @Tag(name = "认证")
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping(ApiPathConstant.API_AUTH)
 @RequiredArgsConstructor
 public class AuthController {
 
     private final UserService userService;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedis;
-
-    private static final String REFRESH_PREFIX = "refresh:";
 
     @Operation(summary = "用户注册")
     @PostMapping("/register")
@@ -57,21 +58,21 @@ public class AuthController {
 
     @Operation(summary = "退出登录  🔒")
     @PostMapping("/logout")
-    public Result<Void> logout(@RequestHeader("Authorization") String authHeader) {
-        String token = authHeader.replace("Bearer ", "");
+    public Result<Void> logout(@RequestHeader(JwtConstant.AUTHORIZATION) String authHeader) {
+        String token = authHeader.replace(JwtConstant.BEARER_PREFIX, "");
         userService.logout(token);
         return Result.success();
     }
 
     @Operation(summary = "刷新 Access Token")
     @PostMapping("/refresh")
-    public Result<Map<String, String>> refresh(@RequestHeader("Authorization") String authHeader) {
-        String refreshToken = authHeader.replace("Bearer ", "");
+    public Result<Map<String, String>> refresh(@RequestHeader(JwtConstant.AUTHORIZATION) String authHeader) {
+        String refreshToken = authHeader.replace(JwtConstant.BEARER_PREFIX, "");
         String newAccessToken = userService.refreshToken(refreshToken);
         return Result.success(Map.of("accessToken", newAccessToken));
     }
 
     private void cacheRefreshToken(Long userId, String refreshToken) {
-        stringRedis.opsForValue().set(REFRESH_PREFIX + userId, refreshToken, 7, TimeUnit.DAYS);
+        stringRedis.opsForValue().set(RedisKeyConstant.REFRESH_TOKEN_PREFIX + userId, refreshToken, 7, TimeUnit.DAYS);
     }
 }

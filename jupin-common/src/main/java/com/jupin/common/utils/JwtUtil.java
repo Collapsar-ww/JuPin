@@ -1,5 +1,6 @@
 package com.jupin.common.utils;
 
+import com.jupin.common.constant.JwtConstant;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -29,8 +30,8 @@ public class JwtUtil {
         Date now = new Date();
         return Jwts.builder()
                 .subject(userId.toString())
-                .claim("phone", phone)
-                .claim("role", role)
+                .claim(JwtConstant.CLAIM_PHONE, phone)
+                .claim(JwtConstant.CLAIM_ROLE, role)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + accessExpiration))
                 .signWith(key)
@@ -41,7 +42,7 @@ public class JwtUtil {
         Date now = new Date();
         return Jwts.builder()
                 .subject(userId.toString())
-                .claim("type", "refresh")
+                .claim(JwtConstant.CLAIM_TYPE, JwtConstant.REFRESH_TYPE)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + refreshExpiration))
                 .signWith(key)
@@ -55,7 +56,7 @@ public class JwtUtil {
 
     public Integer getRoleFromToken(String token) {
         Claims claims = parseToken(token);
-        return claims.get("role", Integer.class);
+        return claims.get(JwtConstant.CLAIM_ROLE, Integer.class);
     }
 
     public boolean validateToken(String token) {

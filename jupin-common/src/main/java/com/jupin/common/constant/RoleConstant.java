@@ -7,9 +7,9 @@ public class RoleConstant {
 
     public static String toPathPrefix(int role) {
         return switch (role) {
-            case PLAYER -> "/api/player";
-            case SHOP -> "/api/shop";
-            case ADMIN -> "/api/admin";
+            case PLAYER -> ApiPathConstant.API_PLAYER;
+            case SHOP -> ApiPathConstant.API_SHOP;
+            case ADMIN -> ApiPathConstant.API_ADMIN;
             default -> "";
         };
     }

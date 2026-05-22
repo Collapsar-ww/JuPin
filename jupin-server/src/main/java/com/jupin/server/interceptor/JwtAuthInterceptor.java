@@ -1,6 +1,11 @@
 package com.jupin.server.interceptor;
 
 import com.jupin.common.context.BaseContext;
+import com.jupin.common.constant.ApiPathConstant;
+import com.jupin.common.constant.ErrorConstant;
+import com.jupin.common.constant.JwtConstant;
+import com.jupin.common.constant.RedisKeyConstant;
+import com.jupin.common.constant.RoleConstant;
 import com.jupin.common.utils.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -22,14 +27,12 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
     /** 无需登录的公开路径 */
     private static final List<String> PUBLIC_PATHS = Arrays.asList(
-            "/api/auth/register", "/api/auth/login", "/api/auth/refresh",
-            "/api/player/pool/list", "/api/player/pool/{id}", "/api/player/script/list",
-            "/api/shop/search", "/api/shop/script/list",
-            "/api/admin/script/list",
-            "/swagger-ui", "/v3/api-docs", "/ws"
+            ApiPathConstant.API_AUTH + "/register", ApiPathConstant.API_AUTH + "/login", ApiPathConstant.API_AUTH + "/refresh",
+            ApiPathConstant.API_PLAYER + "/pool/list", ApiPathConstant.API_PLAYER + "/pool/{id}", ApiPathConstant.API_PLAYER + "/script/list",
+            ApiPathConstant.API_SHOP + "/search", ApiPathConstant.API_SHOP + "/script/list",
+            ApiPathConstant.API_ADMIN + "/script/list",
+            ApiPathConstant.SWAGGER_UI, ApiPathConstant.API_DOCS, ApiPathConstant.WS
     );
-
-    private static final String BLACKLIST_PREFIX = "jwt:blacklist:";
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -46,7 +49,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         }
 
         // 检查黑名单
-        if (Boolean.TRUE.equals(stringRedis.hasKey(BLACKLIST_PREFIX + token))) {
+        if (Boolean.TRUE.equals(stringRedis.hasKey(RedisKeyConstant.JWT_BLACKLIST_PREFIX + token))) {
             response.setStatus(401);
             response.getWriter().write("{\"code\":401,\"message\":\"Token已被吊销\"}");
             return false;
@@ -60,7 +63,7 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         // 角色路径匹配校验
         if (!checkRolePath(path, role)) {
             response.setStatus(403);
-            response.getWriter().write("{\"code\":403,\"message\":\"无权限访问\"}");
+            response.getWriter().write("{\"code\":403,\"message\":\"" + ErrorConstant.ACCESS_DENIED + "\"}");
             BaseContext.remove();
             return false;
         }
@@ -82,17 +85,17 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     }
 
     private boolean checkRolePath(String path, Integer role) {
-        if (path.startsWith("/api/auth/")) return true; // auth always ok after auth
-        if (path.startsWith("/api/player/") && role == 0) return true;
-        if (path.startsWith("/api/shop/") && role == 1) return true;
-        if (path.startsWith("/api/admin/") && role == 2) return true;
+        if (path.startsWith(ApiPathConstant.API_AUTH_PATTERN)) return true; // auth always ok after auth
+        if (path.startsWith(ApiPathConstant.API_PLAYER_PATTERN) && role == RoleConstant.PLAYER) return true;
+        if (path.startsWith(ApiPathConstant.API_SHOP_PATTERN) && role == RoleConstant.SHOP) return true;
+        if (path.startsWith(ApiPathConstant.API_ADMIN_PATTERN) && role == RoleConstant.ADMIN) return true;
         return false;
     }
 
     private String extractToken(HttpServletRequest request) {
-        String header = request.getHeader("Authorization");
-        if (StringUtils.hasText(header) && header.startsWith("Bearer ")) {
-            return header.substring(7);
+        String header = request.getHeader(JwtConstant.AUTHORIZATION);
+        if (StringUtils.hasText(header) && header.startsWith(JwtConstant.BEARER_PREFIX)) {
+            return header.substring(JwtConstant.BEARER_PREFIX.length());
         }
         return null;
     }

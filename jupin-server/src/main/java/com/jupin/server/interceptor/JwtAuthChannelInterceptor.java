@@ -1,5 +1,6 @@
 package com.jupin.server.interceptor;
 
+import com.jupin.common.constant.JwtConstant;
 import com.jupin.common.utils.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.Message;
@@ -24,9 +25,9 @@ public class JwtAuthChannelInterceptor implements ChannelInterceptor {
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
         if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
-            List<String> authHeaders = accessor.getNativeHeader("Authorization");
+            List<String> authHeaders = accessor.getNativeHeader(JwtConstant.AUTHORIZATION);
             if (authHeaders != null && !authHeaders.isEmpty()) {
-                String token = authHeaders.get(0).replace("Bearer ", "");
+                String token = authHeaders.get(0).replace(JwtConstant.BEARER_PREFIX, "");
                 if (StringUtils.hasText(token) && jwtUtil.validateToken(token)) {
                     Long userId = jwtUtil.getUserIdFromToken(token);
                     accessor.setUser((Principal) () -> userId.toString());
