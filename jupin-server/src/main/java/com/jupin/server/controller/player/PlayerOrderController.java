@@ -34,7 +34,7 @@ public class PlayerOrderController {
     @Operation(summary = "模拟支付  🔒")
     @PostMapping("/pay/{orderNo}")
     public Result<Void> pay(@PathVariable String orderNo) {
-        orderService.pay(orderNo);
+        orderService.pay(BaseContext.getCurrentId(), orderNo);
         return Result.success();
     }
 
