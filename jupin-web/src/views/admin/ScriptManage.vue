@@ -28,16 +28,6 @@
       </el-table-column>
     </el-table>
 
-    <el-pagination
-      v-if="total > 0"
-      v-model:current-page="page"
-      :page-size="size"
-      :total="total"
-      layout="prev, pager, next"
-      style="margin-top: 16px; justify-content: center"
-      @current-change="loadScripts"
-    />
-
     <!-- Edit/Create Dialog -->
     <el-dialog v-model="showDialog" :title="isEdit ? '编辑剧本' : '添加剧本'" width="600px">
       <el-form :model="form" label-width="100px" size="small">
@@ -90,7 +80,6 @@ const loading = ref(false)
 const scripts = ref<ScriptItem[]>([])
 const page = ref(1)
 const size = ref(20)
-const total = ref(0)
 
 const showDialog = ref(false)
 const isEdit = ref(false)
@@ -112,8 +101,7 @@ async function loadScripts(p?: number) {
   loading.value = true
   try {
     const res = await getAdminScriptList({ page: page.value, size: size.value })
-    scripts.value = res.data.records
-    total.value = res.data.total
+    scripts.value = res.data
   } finally {
     loading.value = false
   }

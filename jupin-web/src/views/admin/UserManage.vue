@@ -39,15 +39,6 @@
       </el-table-column>
     </el-table>
 
-    <el-pagination
-      v-if="total > 0"
-      v-model:current-page="page"
-      :page-size="size"
-      :total="total"
-      layout="prev, pager, next"
-      style="margin-top: 16px; justify-content: center"
-      @current-change="loadUsers"
-    />
   </div>
 </template>
 
@@ -62,15 +53,13 @@ const loading = ref(false)
 const users = ref<AdminUser[]>([])
 const page = ref(1)
 const size = ref(20)
-const total = ref(0)
 
 async function loadUsers(p?: number) {
   if (p) page.value = p
   loading.value = true
   try {
     const res = await getUserList({ page: page.value, size: size.value })
-    users.value = res.data.records
-    total.value = res.data.total
+    users.value = res.data
   } finally {
     loading.value = false
   }

@@ -55,7 +55,7 @@
 
       <el-tab-pane label="我的订单" name="orders">
         <div v-loading="orderLoading">
-          <el-table :data="orders" size="small" border>
+          <el-table v-if="orders.length > 0" :data="orders" size="small" border>
             <el-table-column prop="orderNo" label="订单号" width="180" />
             <el-table-column label="类型" width="60">
               <template #default="{ row }">{{ row.type === 0 ? '押金' : '车费' }}</template>
@@ -82,16 +82,6 @@
             </el-table-column>
           </el-table>
           <el-empty v-if="orders.length === 0" description="暂无订单" />
-          <el-pagination
-            v-if="orderTotal > 0"
-            v-model:current-page="orderPage"
-            :page-size="orderSize"
-            :total="orderTotal"
-            layout="prev, pager, next"
-            small
-            style="margin-top: 12px; justify-content: center"
-            @current-change="loadOrders"
-          />
         </div>
       </el-tab-pane>
 
@@ -123,7 +113,6 @@ import { SCRIPT_TYPES, ORDER_STATUS_TEXT, ORDER_STATUS } from '../../constants'
 import PoolCard from '../../components/PoolCard.vue'
 import { formatPrice, formatDateTime } from '../../utils/format'
 
-const router = undefined
 const auth = useAuthStore()
 
 const user = computed(() => auth.user)
@@ -142,7 +131,6 @@ const orderLoading = ref(false)
 const orders = ref<OrderItem[]>([])
 const orderPage = ref(1)
 const orderSize = ref(10)
-const orderTotal = ref(0)
 
 const todoLoading = ref(false)
 const todos = ref<any[]>([])
@@ -182,7 +170,7 @@ async function loadMyPools() {
   poolLoading.value = true
   try {
     const res = await getPlayerPoolList({ page: 1, size: 50 })
-    myPools.value = res.data.records.filter(
+    myPools.value = res.data.filter(
       p => p.ownerId === auth.user?.id
     )
   } finally {
@@ -195,8 +183,7 @@ async function loadOrders(p?: number) {
   orderLoading.value = true
   try {
     const res = await getMyOrders({ page: orderPage.value, size: orderSize.value })
-    orders.value = res.data.records
-    orderTotal.value = res.data.total
+    orders.value = res.data
   } finally {
     orderLoading.value = false
   }

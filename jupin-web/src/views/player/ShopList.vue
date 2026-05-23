@@ -40,15 +40,6 @@
         </el-col>
       </el-row>
       <el-empty v-if="!loading && shops.length === 0" description="暂无店铺" />
-      <el-pagination
-        v-if="total > 0"
-        v-model:current-page="page"
-        :page-size="size"
-        :total="total"
-        layout="prev, pager, next"
-        style="margin-top: 16px; justify-content: center"
-        @current-change="loadShops"
-      />
     </div>
   </div>
 </template>
@@ -62,7 +53,6 @@ const shops = ref<ShopListItem[]>([])
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
-const total = ref(0)
 const city = ref('')
 const keyword = ref('')
 
@@ -76,8 +66,7 @@ async function loadShops(p?: number) {
       page: page.value,
       size: size.value,
     })
-    shops.value = res.data.records
-    total.value = res.data.total
+    shops.value = res.data
   } finally {
     loading.value = false
   }

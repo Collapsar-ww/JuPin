@@ -1,9 +1,9 @@
 <template>
   <div class="player-pools">
     <div class="page-header">
-      <h3>玩家局列表</h3>
+      <h3>拼车列表</h3>
       <el-button type="primary" @click="$router.push('/player/pools/create')">
-        发布玩家局
+        发布拼车
       </el-button>
     </div>
 
@@ -32,16 +32,7 @@
     </div>
     <template v-else>
       <PoolCard v-for="pool in pools" :key="pool.id" :pool="pool" />
-      <el-empty v-if="pools.length === 0" description="暂无玩家局" />
-      <el-pagination
-        v-if="total > 0"
-        v-model:current-page="page"
-        :page-size="size"
-        :total="total"
-        layout="prev, pager, next"
-        style="margin-top: 16px; justify-content: center"
-        @current-change="loadPools"
-      />
+      <el-empty v-if="pools.length === 0" description="暂无拼车" />
     </template>
   </div>
 </template>
@@ -58,7 +49,6 @@ const pools = ref<PoolListItem[]>([])
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
-const total = ref(0)
 
 const filters = reactive({
   city: '',
@@ -83,8 +73,7 @@ async function loadPools(p?: number) {
       size: size.value,
       type: 0,
     })
-    pools.value = res.data.records
-    total.value = res.data.total
+    pools.value = res.data
   } finally {
     loading.value = false
   }

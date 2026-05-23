@@ -10,12 +10,16 @@
           </template>
         </el-image>
       </div>
-      <div style="margin-top: 16px">
-        <h3>{{ shop.name }}</h3>
-        <p class="shop-addr">{{ shop.city }} · {{ shop.address }}</p>
-        <p v-if="shop.phone">📞 {{ shop.phone }}</p>
-        <p v-if="shop.openingHours">🕐 {{ shop.openingHours }}</p>
-        <p class="shop-desc">{{ shop.description || '暂无简介' }}</p>
+      <div class="shop-info">
+        <div class="shop-info-main">
+          <h3>{{ shop.name }}</h3>
+          <p class="shop-addr">{{ shop.city }} · {{ shop.address }}</p>
+          <p class="shop-desc">{{ shop.description || '暂无简介' }}</p>
+        </div>
+        <div class="shop-info-side">
+          <p v-if="shop.phone"><span class="info-label">电话</span>{{ shop.phone }}</p>
+          <p v-if="shop.openingHours"><span class="info-label">营业时间</span>{{ shop.openingHours }}</p>
+        </div>
       </div>
     </el-card>
 
@@ -37,7 +41,7 @@
     </el-card>
 
     <el-card shadow="never" style="margin-top: 16px">
-      <h4>店家局</h4>
+      <h4>店铺拼车</h4>
       <div v-for="pool in pools" :key="pool.id" class="pool-row">
         <div class="pool-row-info">
           <span class="pool-row-name">{{ pool.scriptName }}</span>
@@ -49,7 +53,7 @@
         </div>
         <el-button size="small" @click="$router.push(`/player/pools/${pool.id}`)">详情</el-button>
       </div>
-      <el-empty v-if="pools.length === 0" description="暂无店家局" />
+      <el-empty v-if="pools.length === 0" description="暂无店铺拼车" />
     </el-card>
   </div>
 </template>
@@ -78,8 +82,8 @@ async function loadDetail() {
       getShopPools(id, { page: 1, size: 20 }),
     ])
     shop.value = shopRes.data
-    scripts.value = scriptRes.data.records
-    pools.value = poolRes.data.records
+    scripts.value = scriptRes.data
+    pools.value = poolRes.data
   } finally {
     loading.value = false
   }
@@ -96,6 +100,11 @@ onMounted(loadDetail)
   display: flex; align-items: center; justify-content: center;
   font-size: 28px; color: #fff; border-radius: 8px;
 }
+.shop-info { display: flex; gap: 24px; margin-top: 16px; }
+.shop-info-main { flex: 1; }
+.shop-info-side { width: 220px; text-align: right; }
+.shop-info-side p { margin: 4px 0; font-size: 13px; color: #606266; }
+.info-label { display: block; font-size: 12px; color: #909399; }
 .shop-addr { font-size: 13px; color: #909399; }
 .shop-desc { font-size: 14px; color: #606266; margin-top: 8px; }
 .pool-row {
