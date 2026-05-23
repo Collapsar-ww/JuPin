@@ -1,5 +1,5 @@
 import { get, post, put, del } from '../utils/request'
-import type { ApiResult, PageResult } from '../utils/request'
+import type { ApiResult } from '../utils/request'
 import type { PoolListItem, PoolDetail, OrderItem, ScriptItem, ChatMessage } from './player'
 
 export interface ShopInfo {
@@ -19,14 +19,16 @@ export interface ShopMember {
   id: number
   userId: number
   nickname: string
+  avatar: string | null
   role: number
-  roleText: string
-  status: number
   createTime: string
 }
 
 export interface CreateShopPoolRequest {
+  shopId: number
   scriptId: number
+  scriptName: string
+  scriptType: string
   city: string
   address: string
   startTime: string
@@ -63,21 +65,21 @@ export function setMemberRole(shopId: number, data: { userId: number; role: numb
   return put(`/shop/${shopId}/members/role`, data)
 }
 
-// === Shop Scripts ===
-export function getShopScripts(shopId: number, params?: any): Promise<ApiResult<PageResult<ScriptItem>>> {
-  return get(`/shop/${shopId}/scripts`, params)
+// === Shop Scripts (base: /api/shop/script/) ===
+export function getShopScripts(shopId: number, params?: any): Promise<ApiResult<ScriptItem[]>> {
+  return get(`/shop/script/${shopId}/scripts`, params)
 }
 
 export function addShopScript(shopId: number, scriptId: number): Promise<ApiResult<void>> {
-  return post(`/shop/${shopId}/scripts/add`, { scriptId })
+  return post(`/shop/script/${shopId}/scripts/add`, { scriptId })
 }
 
 export function removeShopScript(shopId: number, scriptId: number): Promise<ApiResult<void>> {
-  return del(`/shop/${shopId}/scripts/${scriptId}`)
+  return del(`/shop/script/${shopId}/scripts/${scriptId}`)
 }
 
 // === System Scripts ===
-export function getSystemScripts(params?: any): Promise<ApiResult<PageResult<ScriptItem>>> {
+export function getSystemScripts(params?: any): Promise<ApiResult<ScriptItem[]>> {
   return get('/shop/script/list', params)
 }
 
@@ -86,7 +88,7 @@ export function createShopPool(data: CreateShopPoolRequest): Promise<ApiResult<{
   return post('/shop/pool/create', data)
 }
 
-export function getShopPoolList(params?: any): Promise<ApiResult<PageResult<PoolListItem>>> {
+export function getShopPoolList(params?: any): Promise<ApiResult<PoolListItem[]>> {
   return get('/shop/pool/list', params)
 }
 
@@ -115,7 +117,7 @@ export function cancelShopPool(poolId: number): Promise<ApiResult<any>> {
 }
 
 // === Order ===
-export function getShopOrders(params?: any): Promise<ApiResult<PageResult<OrderItem>>> {
+export function getShopOrders(params?: any): Promise<ApiResult<OrderItem[]>> {
   return get('/shop/order/list', params)
 }
 
@@ -125,7 +127,7 @@ export function getShopReviews(): Promise<ApiResult<any[]>> {
 }
 
 // === Chat ===
-export function getShopChatHistory(params: { poolId: number; page?: number; size?: number }): Promise<ApiResult<PageResult<ChatMessage>>> {
+export function getShopChatHistory(params: { poolId: number; page?: number; size?: number }): Promise<ApiResult<ChatMessage[]>> {
   return get('/shop/chat/history', params)
 }
 

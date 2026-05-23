@@ -22,13 +22,13 @@ export const POOL_STATUS_TEXT: Record<number, string> = {
   [POOL_STATUS.CANCELLED]: '已取消',
 }
 
-export const POOL_STATUS_TAG = {
+export const POOL_STATUS_TAG: Record<number, string> = {
   [POOL_STATUS.OPEN]: 'success',
   [POOL_STATUS.FULL]: 'warning',
   [POOL_STATUS.COMPLETED]: 'primary',
   [POOL_STATUS.FINISHED]: 'info',
   [POOL_STATUS.CANCELLED]: 'danger',
-} as const
+}
 
 export const POOL_TYPE = {
   PLAYER: 0,
@@ -36,8 +36,8 @@ export const POOL_TYPE = {
 } as const
 
 export const POOL_TYPE_TEXT: Record<number, string> = {
-  [POOL_TYPE.PLAYER]: '玩家局',
-  [POOL_TYPE.SHOP]: '店家局',
+  [POOL_TYPE.PLAYER]: '玩家拼车',
+  [POOL_TYPE.SHOP]: '店铺拼车',
 }
 
 export const MEMBER_STATUS = {

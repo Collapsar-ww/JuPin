@@ -1,5 +1,5 @@
 import { get, post, put, del } from '../utils/request'
-import type { ApiResult, PageResult } from '../utils/request'
+import type { ApiResult } from '../utils/request'
 import type { ScriptItem } from './player'
 
 export interface AdminUser {
@@ -12,7 +12,7 @@ export interface AdminUser {
   createTime: string
 }
 
-export function getAdminScriptList(params?: any): Promise<ApiResult<PageResult<ScriptItem>>> {
+export function getAdminScriptList(params?: any): Promise<ApiResult<ScriptItem[]>> {
   return get('/admin/script/list', params)
 }
 
@@ -28,7 +28,7 @@ export function deleteScript(id: number): Promise<ApiResult<void>> {
   return del(`/admin/script/${id}`)
 }
 
-export function getUserList(params?: any): Promise<ApiResult<PageResult<AdminUser>>> {
+export function getUserList(params?: any): Promise<ApiResult<AdminUser[]>> {
   return get('/admin/user/list', params)
 }
 

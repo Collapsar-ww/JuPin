@@ -1,37 +1,39 @@
 import { get, post, put } from '../utils/request'
-import type { ApiResult, PageResult } from '../utils/request'
+import type { ApiResult } from '../utils/request'
+import type { UserInfo } from './auth'
 
 export interface PoolListItem {
   id: number
   type: number
+  ownerId: number
+  ownerNickname: string
+  shopId: number | null
+  shopName: string | null
+  scriptId: number
   scriptName: string
   scriptType: string
   city: string
   address: string
   startTime: string
+  endTime: string | null
   maxMembers: number
   currentMembers: number
   price: number
   deposit: number
-  ownerId: number
-  ownerName: string
-  status: number
-  joinType: number
   dmId: number | null
-  dmName: string | null
-  shopName: string | null
+  dmNickname: string | null
+  joinType: number
+  status: number
+  createTime: string
 }
 
 export interface PoolDetail extends PoolListItem {
-  shopId: number | null
-  scriptId: number
-  endTime: string | null
-  description: string
-  createTime: string
   members: PoolMemberItem[]
+  roles: string | null
 }
 
 export interface PoolMemberItem {
+  id: number
   userId: number
   nickname: string
   avatar: string | null
@@ -54,7 +56,7 @@ export interface ShopListItem {
 }
 
 export interface ShopDetail extends ShopListItem {
-  pools: PoolListItem[]
+  pools?: PoolListItem[]
 }
 
 export interface ScriptItem {
@@ -96,9 +98,12 @@ export interface Preference {
 
 export interface CreatePoolRequest {
   scriptId: number
+  scriptName: string
+  scriptType: string
   city: string
   address: string
   startTime: string
+  endTime?: string
   maxMembers: number
   price: number
   joinType: number
@@ -125,7 +130,7 @@ export interface MessageItem {
 }
 
 // === Player Pool ===
-export function getPlayerPoolList(params?: any): Promise<ApiResult<PageResult<PoolListItem>>> {
+export function getPlayerPoolList(params?: any): Promise<ApiResult<PoolListItem[]>> {
   return get('/player/pool/list', params)
 }
 
@@ -166,12 +171,12 @@ export function transferDm(poolId: number, targetUserId: number): Promise<ApiRes
 }
 
 // === Script ===
-export function getScriptList(params?: any): Promise<ApiResult<PageResult<ScriptItem>>> {
+export function getScriptList(params?: any): Promise<ApiResult<ScriptItem[]>> {
   return get('/player/script/list', params)
 }
 
 // === Shop browsing (player) ===
-export function getShopList(params?: any): Promise<ApiResult<PageResult<ShopListItem>>> {
+export function getShopList(params?: any): Promise<ApiResult<ShopListItem[]>> {
   return get('/player/shop/list', params)
 }
 
@@ -179,11 +184,11 @@ export function getShopDetail(id: number): Promise<ApiResult<ShopDetail>> {
   return get(`/player/shop/${id}`)
 }
 
-export function getShopScripts(id: number, params?: any): Promise<ApiResult<PageResult<ScriptItem>>> {
+export function getShopScripts(id: number, params?: any): Promise<ApiResult<ScriptItem[]>> {
   return get(`/player/shop/${id}/scripts`, params)
 }
 
-export function getShopPools(id: number, params?: any): Promise<ApiResult<PageResult<PoolListItem>>> {
+export function getShopPools(id: number, params?: any): Promise<ApiResult<PoolListItem[]>> {
   return get(`/player/shop/${id}/pools`, params)
 }
 
@@ -196,7 +201,7 @@ export function payOrder(orderNo: string): Promise<ApiResult<OrderItem>> {
   return post(`/player/order/pay/${orderNo}`)
 }
 
-export function getMyOrders(params?: any): Promise<ApiResult<PageResult<OrderItem>>> {
+export function getMyOrders(params?: any): Promise<ApiResult<OrderItem[]>> {
   return get('/player/order/my', params)
 }
 
@@ -205,7 +210,7 @@ export function getCreditScore(): Promise<ApiResult<number>> {
   return get('/player/credit/score')
 }
 
-export function getCreditLog(params?: any): Promise<ApiResult<PageResult<any>>> {
+export function getCreditLog(params?: any): Promise<ApiResult<any[]>> {
   return get('/player/credit/log', params)
 }
 
@@ -243,7 +248,7 @@ export function savePreference(data: Preference): Promise<ApiResult<void>> {
 }
 
 // === Message ===
-export function getMessageList(params?: any): Promise<ApiResult<PageResult<MessageItem>>> {
+export function getMessageList(params?: any): Promise<ApiResult<MessageItem[]>> {
   return get('/player/message/list', params)
 }
 
@@ -260,7 +265,7 @@ export function markAllRead(): Promise<ApiResult<void>> {
 }
 
 // === Chat ===
-export function getChatHistory(params: { poolId: number; page?: number; size?: number }): Promise<ApiResult<PageResult<ChatMessage>>> {
+export function getChatHistory(params: { poolId: number; page?: number; size?: number }): Promise<ApiResult<ChatMessage[]>> {
   return get('/player/chat/history', params)
 }
 
