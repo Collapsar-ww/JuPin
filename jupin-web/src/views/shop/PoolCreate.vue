@@ -1,6 +1,6 @@
 <template>
   <div class="shop-pool-create">
-    <h3>发布店家局</h3>
+    <h3>发布店铺拼车</h3>
 
     <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" style="max-width: 600px">
       <el-form-item label="选择剧本" prop="scriptId">
@@ -35,7 +35,7 @@
       </el-form-item>
 
       <el-form-item label="人均费用" prop="price">
-        <el-input-number v-model="form.price" :min="0" :precision="2" :step="10" />
+        <el-input v-model.number="form.price" type="number" :min="0" step="0.01" style="width: 180px" />
         <span class="form-tip">元/人</span>
       </el-form-item>
 
@@ -57,7 +57,7 @@
 
       <el-form-item label="指定 DM" prop="dmId">
         <el-select v-model="form.dmId" placeholder="选择店铺成员作为 DM" style="width: 100%">
-          <el-option v-for="m in members" :key="m.userId" :label="`${m.nickname}（${m.roleText}）`"
+          <el-option v-for="m in members" :key="m.userId" :label="m.nickname"
             :value="m.userId" />
         </el-select>
       </el-form-item>
@@ -76,7 +76,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 import { getCurrentShop, getShopScripts, getShopMembers, createShopPool } from '../../api/shop'
-import type { ScriptItem, ShopMember } from '../../api/shop'
+import type { ShopMember } from '../../api/shop'
+import type { ScriptItem } from '../../api/player'
 import { formatPrice } from '../../utils/format'
 
 const router = useRouter()
@@ -120,7 +121,7 @@ onMounted(async () => {
     getShopScripts(shopRes.data.id, { page: 1, size: 100 }),
     getShopMembers(shopRes.data.id),
   ])
-  shopScripts.value = scriptRes.data.records
+  shopScripts.value = scriptRes.data
   members.value = memberRes.data
 })
 
@@ -129,8 +130,12 @@ async function handleCreate() {
   if (!valid) return
   submitting.value = true
   try {
+    const selected = selectedScript.value
     const res = await createShopPool({
+      shopId: shopId.value,
       scriptId: form.scriptId!,
+      scriptName: selected?.name || '',
+      scriptType: selected?.type || '',
       city: form.city,
       address: form.address,
       startTime: form.startTime,

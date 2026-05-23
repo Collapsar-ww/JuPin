@@ -1,6 +1,6 @@
 <template>
   <div class="pool-create">
-    <h3>发布玩家局</h3>
+    <h3>发布拼车</h3>
 
     <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" style="max-width: 600px">
       <el-form-item label="选择剧本" prop="scriptId">
@@ -25,13 +25,18 @@
           style="width: 100%" value-format="YYYY-MM-DD HH:mm:ss" />
       </el-form-item>
 
+      <el-form-item label="结束时间" prop="endTime">
+        <el-date-picker v-model="form.endTime" type="datetime" placeholder="选择结束时间"
+          style="width: 100%" value-format="YYYY-MM-DD HH:mm:ss" />
+      </el-form-item>
+
       <el-form-item label="人数上限" prop="maxMembers">
         <el-input-number v-model="form.maxMembers" :min="selectedMinPlayers" :max="selectedMaxPlayers" />
         <span class="form-tip">可选 {{ selectedMinPlayers }}-{{ selectedMaxPlayers }} 人</span>
       </el-form-item>
 
       <el-form-item label="人均费用" prop="price">
-        <el-input-number v-model="form.price" :min="0" :precision="2" :step="10" />
+        <el-input v-model.number="form.price" type="number" :min="0" step="0.01" style="width: 180px" />
         <span class="form-tip">元/人</span>
       </el-form-item>
 
@@ -85,6 +90,7 @@ const form = reactive({
   city: '',
   address: '',
   startTime: '',
+  endTime: '',
   maxMembers: 4,
   price: 0,
   joinType: 1,
@@ -104,7 +110,7 @@ const selectedMaxPlayers = computed(() => selectedScript.value?.maxPlayers ?? 10
 
 onMounted(async () => {
   const res = await getScriptList({ page: 1, size: 50 })
-  scripts.value = res.data.records
+  scripts.value = res.data
 })
 
 async function searchScripts(query: string) {
@@ -112,7 +118,7 @@ async function searchScripts(query: string) {
   scriptLoading.value = true
   try {
     const res = await getScriptList({ name: query, page: 1, size: 20 })
-    scripts.value = res.data.records
+    scripts.value = res.data
   } finally {
     scriptLoading.value = false
   }
@@ -123,11 +129,15 @@ async function handleCreate() {
   if (!valid) return
   submitting.value = true
   try {
+    const selected = selectedScript.value
     const res = await createPlayerPool({
       scriptId: form.scriptId!,
+      scriptName: selected?.name || '',
+      scriptType: selected?.type || '',
       city: form.city,
       address: form.address,
       startTime: form.startTime,
+      endTime: form.endTime,
       maxMembers: form.maxMembers,
       price: form.price,
       joinType: form.joinType,
