@@ -861,3 +861,69 @@ chore: 更新初始化SQL
 #### 3. 下一步
 
 **明天直接开始前端构建（Vue 3 + Vant UI）。**
+
+---
+
+## 日期：2026-05-23（第一段）
+
+### 本轮操作：Docker 编译与运行链路修复
+
+#### 1. 问题现象
+
+此前项目只能在本地直接编译运行，无法稳定通过 Docker 环境完成后端镜像构建与容器启动。
+
+排查到的问题包括：
+- Dockerfile 固定使用 `--platform=linux/amd64`，在当前 Colima / Apple Silicon 环境下会触发平台不匹配警告。
+- `eclipse-temurin:17-jre-alpine` 在当前架构下拉取失败，提示 `no match for platform in manifest`。
+- `mvn dependency:go-offline` 会拉取大量无关 Maven 插件和报告依赖，首次构建时间过长。
+- App 容器内连接 Redis 时仍使用 `6380`，但 `6380` 是宿主机映射端口；容器网络内应访问 `redis:6379`。
+- 本地 Java 后端占用 `8080`，Docker app 如直接映射 `8080:8080` 会与本地服务冲突。
+
+#### 2. 修复内容
+
+| 文件 | 修改内容 |
+|------|---------|
+| `Dockerfile` | 去掉固定 `linux/amd64`；运行镜像改为 `eclipse-temurin:17-jre-jammy`；去掉 `mvn dependency:go-offline`；使用 BuildKit Maven 缓存；构建命令改为 `mvn -pl jupin-server -am package -Dmaven.test.skip=true -B` |
+| `docker-compose.yml` | 删除过期的 `version` 字段；给 app 环境变量新增 `SPRING_REDIS_PORT: 6379` |
+
+#### 3. 验证结果
+
+执行 Docker 构建：
+
+```bash
+docker compose build app
+```
+
+结果：
+- 首次构建成功，耗时约 4 分钟。
+- Maven 依赖缓存建立后，二次构建成功，耗时约 3 秒。
+
+由于本地 Java 后端已占用 `8080`，使用临时端口 `8081` 启动 Docker app：
+
+```bash
+APP_PORT=8081 docker compose up -d app
+```
+
+结果：
+- `jp-mysql`、`jp-redis`、`jp-rabbitmq` 均为 healthy。
+- `jp-app` 状态为 `Up`，端口映射为 `0.0.0.0:8081->8080/tcp`。
+- `curl --noproxy '*' http://127.0.0.1:8081/v3/api-docs` 返回 `HTTP/1.1 200`。
+
+#### 4. 后续运行约定
+
+如果完全使用 Docker 跑后端，先停止本地 Java 后端，然后直接运行：
+
+```bash
+docker compose up -d app
+```
+
+如果需要保留本地后端，同时启动 Docker 后端用于对照验证，则使用：
+
+```bash
+APP_PORT=8081 docker compose up -d app
+```
+
+注意：
+- 本地开发配置中 Redis 访问宿主机端口 `localhost:6380`。
+- Docker 容器内部访问 Redis 必须使用服务名和容器端口 `redis:6379`。
+- `localhost` 可能被系统代理影响，接口验证优先使用 `127.0.0.1` 并加 `--noproxy '*'`。

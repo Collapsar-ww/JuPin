@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   mysql:
     image: mysql:8.0
@@ -67,6 +65,7 @@ services:
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
       SPRING_RABBITMQ_HOST: rabbitmq
       JUPIN_JWT_SECRET: ${JWT_SECRET}
       JUPIN_JWT_EXPIRATION: ${JWT_EXPIRATION}
