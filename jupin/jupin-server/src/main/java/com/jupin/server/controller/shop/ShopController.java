@@ -2,6 +2,7 @@ package com.jupin.server.controller.shop;
 
 import cn.hutool.core.bean.BeanUtil;
 import com.jupin.common.context.BaseContext;
+import com.jupin.common.exception.BaseException;
 import com.jupin.common.result.Result;
 import com.jupin.pojo.dto.SetMemberRoleRequest;
 import com.jupin.pojo.dto.ShopCreateRequest;
@@ -9,9 +10,11 @@ import com.jupin.pojo.dto.ShopJoinRequest;
 import com.jupin.pojo.dto.ShopUpdateRequest;
 import com.jupin.pojo.entity.Shop;
 import com.jupin.pojo.entity.ShopMember;
+import com.jupin.pojo.vo.ShopCurrentVO;
 import com.jupin.pojo.vo.ShopMemberVO;
 import com.jupin.pojo.vo.ShopVO;
 import com.jupin.server.converter.VOConverter;
+import com.jupin.server.mapper.ShopMemberMapper;
 import com.jupin.server.service.ShopService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +32,7 @@ import java.util.stream.Collectors;
 public class ShopController {
 
     private final ShopService shopService;
+    private final ShopMemberMapper shopMemberMapper;
     private final VOConverter converter;
 
     @Operation(summary = "创建店铺  🔒")
@@ -43,6 +47,25 @@ public class ShopController {
     public Result<ShopVO> my() {
         Shop shop = shopService.getMyShop(BaseContext.getCurrentId());
         return Result.success(BeanUtil.copyProperties(shop, ShopVO.class));
+    }
+
+    @Operation(summary = "当前店家账号绑定店铺  🔒")
+    @GetMapping("/current")
+    public Result<ShopCurrentVO> current() {
+        ShopMember member = shopMemberMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<ShopMember>()
+                        .eq("user_id", BaseContext.getCurrentId()));
+        if (member == null) {
+            return Result.error("当前账号未绑定店铺");
+        }
+        Shop shop = shopService.getMyShop(BaseContext.getCurrentId());
+        ShopCurrentVO vo = new ShopCurrentVO();
+        vo.setId(shop.getId());
+        vo.setName(shop.getName());
+        vo.setCity(shop.getCity());
+        vo.setAddress(shop.getAddress());
+        vo.setRole(member.getRole());
+        return Result.success(vo);
     }
 
     @Operation(summary = "修改店铺信息  🔒")
