@@ -32,8 +32,11 @@
     <!-- Add Member Dialog -->
     <el-dialog v-model="showAddDialog" title="添加成员" width="400px">
       <el-form :model="addForm" label-width="80px">
-        <el-form-item label="用户ID">
-          <el-input-number v-model="addForm.userId" :min="1" />
+        <el-form-item label="手机号">
+          <el-input v-model="addForm.phone" placeholder="输入用户手机号搜索" maxlength="11" />
+        </el-form-item>
+        <el-form-item v-if="addForm.foundUser" label="搜索结果">
+          <span>{{ addForm.foundUser.nickname }}（ID: {{ addForm.foundUser.id }}）</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -49,9 +52,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getCurrentShop, getShopMembers, addShopMember, removeShopMember, setMemberRole } from '../../api/shop'
 import type { ShopMember } from '../../api/shop'
-import { useAuthStore } from '../../stores/auth'
-
-const auth = useAuthStore()
+import { getUserList } from '../../api/admin'
 const loading = ref(false)
 const members = ref<ShopMember[]>([])
 const shopId = ref(0)
@@ -62,7 +63,10 @@ const isAdmin = computed(() => currentRole.value === 2 || currentRole.value === 
 
 const showAddDialog = ref(false)
 const adding = ref(false)
-const addForm = reactive({ userId: 1 })
+const addForm = reactive({
+  phone: '',
+  foundUser: null as { id: number; nickname: string } | null,
+})
 
 async function loadMembers() {
   loading.value = true
@@ -78,11 +82,37 @@ async function loadMembers() {
 }
 
 async function addMember() {
+  if (!addForm.foundUser) {
+    // Search by phone first
+    adding.value = true
+    try {
+      const res = await getUserList({ phone: addForm.phone, page: 1, size: 1 })
+      if (res.data.length === 0) {
+        ElMessage.error('未找到该手机号的用户')
+        return
+      }
+      const user = res.data[0]
+      await addShopMember(shopId.value, { userId: user.id })
+      ElMessage.success('添加成功')
+      showAddDialog.value = false
+      addForm.phone = ''
+      addForm.foundUser = null
+      loadMembers()
+    } catch {
+      ElMessage.error('搜索用户失败，请检查手机号或权限')
+    } finally {
+      adding.value = false
+    }
+    return
+  }
+  // Use already-found user
   adding.value = true
   try {
-    await addShopMember(shopId.value, { userId: addForm.userId })
+    await addShopMember(shopId.value, { userId: addForm.foundUser.id })
     ElMessage.success('添加成功')
     showAddDialog.value = false
+    addForm.phone = ''
+    addForm.foundUser = null
     loadMembers()
   } finally {
     adding.value = false
