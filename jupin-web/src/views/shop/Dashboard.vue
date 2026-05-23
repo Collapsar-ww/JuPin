@@ -7,7 +7,7 @@
         <el-card shadow="never">
           <div class="stat-item">
             <div class="stat-value">{{ stats.openPools }}</div>
-            <div class="stat-label">开放中店家局</div>
+            <div class="stat-label">开放中店铺拼车</div>
           </div>
         </el-card>
       </el-col>
@@ -39,7 +39,7 @@
 
     <el-card shadow="never">
       <template #header>
-        <span>最近店家局</span>
+        <span>最近拼车</span>
       </template>
       <el-table v-if="pools.length > 0" :data="pools" size="small" border>
         <el-table-column prop="scriptName" label="剧本" />
@@ -60,7 +60,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="暂无店家局" />
+      <el-empty v-else description="暂无拼车" />
     </el-card>
   </div>
 </template>
@@ -84,12 +84,12 @@ const stats = ref({
 async function loadDashboard() {
   loading.value = true
   try {
-    const shopRes = await getCurrentShop()
+    await getCurrentShop()
     const poolRes = await getShopPoolList({ page: 1, size: 20 })
 
-    pools.value = poolRes.data.records
-    stats.value.openPools = poolRes.data.records.filter(p => p.status === 0).length
-    stats.value.todayPools = poolRes.data.records.filter(p => {
+    pools.value = poolRes.data
+    stats.value.openPools = poolRes.data.filter(p => p.status === 0).length
+    stats.value.todayPools = poolRes.data.filter(p => {
       const today = new Date().toISOString().substring(0, 10)
       return p.startTime?.startsWith(today)
     }).length

@@ -24,7 +24,7 @@
           @click="form.role = 'shop'"
         >
           <h3>我是店家</h3>
-          <p>经营店铺，发布店家局，管理剧本和成员</p>
+          <p>经营店铺，发布店铺拼车，管理剧本和成员</p>
         </div>
         <el-button
           type="primary"
