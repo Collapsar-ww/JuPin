@@ -1,22 +1,16 @@
-# Build outputs
+# Maven build
 target/
 **/target/
-dist/
-dist-ssr/
 
-# Dependencies
-node_modules/
-
-# IDE
+# IDE - local only
 .idea/
-.vscode/
 *.iml
 *.iws
 *.ipr
+.vscode/
 
-# Local tools
+# Local AI/tooling
 .claude/
-.code
 
 # OS
 .DS_Store
@@ -24,11 +18,18 @@ Thumbs.db
 
 # Env
 .env
-*.local
 
 # Logs
 *.log
 logs/
+
+# Docker
+lima.tar.gz
+
+# Local Lima/tool binaries
+bin/
+libexec/
+share/
 
 # Temp
 tmp/

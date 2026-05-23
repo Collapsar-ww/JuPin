@@ -1,0 +1,2298 @@
+openapi: 3.0.3
+info:
+  title: 剧本杀拼车系统 API
+  version: 2.4.0
+  description: |
+    JuPin 后端接口设计文档，可直接导入 Apifox。
+
+    本地测试 Base URL: http://localhost:8080
+
+    前端和 Nginx 未启动不影响接口测试，Apifox 直接请求 Spring Boot 后端即可。
+
+    认证方式：
+    - 注册/登录接口不需要 Token
+    - 玩家端接口使用玩家 Token
+    - 店家端接口使用店家 Token
+    - 管理端接口使用管理员 Token
+    - Header: Authorization: Bearer <accessToken>
+
+    WebSocket:
+    - 连接端点：/ws
+    - 拼车状态订阅：/topic/pool/{poolId}
+    - 群聊订阅：/topic/pool/{poolId}/chat
+    - 匹配推送：/queue/match/{userId}
+servers:
+  - url: http://localhost:8080
+    description: 本地开发环境
+
+tags:
+  - name: 认证
+  - name: 玩家端-用户
+  - name: 玩家端-剧本
+  - name: 玩家端-拼车
+  - name: 玩家端-订单
+  - name: 玩家端-信用
+  - name: 玩家端-评价
+  - name: 玩家端-消息
+  - name: 玩家端-群聊
+  - name: 店家端-用户
+  - name: 店家端-店铺
+  - name: 店家端-剧本
+  - name: 店家端-拼车
+  - name: 店家端-订单
+  - name: 店家端-评价
+  - name: 店家端-群聊
+  - name: 管理端-剧本
+  - name: 管理端-用户
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [认证]
+      summary: 用户注册
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              phone: '13800000001'
+              password: abc123456
+              nickname: 玩家一号
+              gender: 1
+              role: player
+              city: 上海
+      responses:
+        '200':
+          description: 注册成功，返回 Access Token、Refresh Token 和用户信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResult'
+
+  /api/auth/login:
+    post:
+      tags: [认证]
+      summary: 用户登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              phone: '13800000001'
+              password: abc123456
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResult'
+
+  /api/auth/logout:
+    post:
+      tags: [认证]
+      summary: 退出登录
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/auth/refresh:
+    post:
+      tags: [认证]
+      summary: 刷新 Access Token
+      description: Authorization Header 传 Refresh Token。
+      responses:
+        '200':
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefreshResult'
+
+  /api/player/user/me:
+    get:
+      tags: [玩家端-用户]
+      summary: 获取当前玩家信息
+      responses:
+        '200':
+          description: 当前玩家信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResult'
+    put:
+      tags: [玩家端-用户]
+      summary: 修改当前玩家信息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+            example:
+              nickname: 新昵称
+              avatar: ''
+              gender: 1
+              city: 上海
+              preference: 硬核,情感
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/script/list:
+    get:
+      tags: [玩家端-剧本]
+      summary: 系统剧本库列表
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 剧本列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResult'
+
+  /api/player/pool/create:
+    post:
+      tags: [玩家端-拼车]
+      summary: 发布玩家局
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PoolCreateRequest'
+            example:
+              scriptId: 1
+              scriptName: 年轮
+              scriptType: 硬核
+              roles: '[{"name":"侦探","desc":"推理位"}]'
+              city: 上海
+              address: 静安区南京西路XX号
+              startTime: '2026-06-01 14:00:00'
+              endTime: '2026-06-01 18:00:00'
+              maxMembers: 6
+              price: 88
+              deposit: 10
+              joinType: 1
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolResult'
+
+  /api/player/pool/list:
+    get:
+      tags: [玩家端-拼车]
+      summary: 玩家端拼车列表
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/ScriptType'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/PriceMin'
+        - $ref: '#/components/parameters/PriceMax'
+        - $ref: '#/components/parameters/StartTimeAfter'
+        - $ref: '#/components/parameters/StartTimeBefore'
+        - $ref: '#/components/parameters/Recommend'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 拼车列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolListResult'
+
+  /api/player/preference:
+    get:
+      tags: [玩家端-偏好]
+      summary: 获取当前玩家偏好
+      responses:
+        '200':
+          description: 玩家偏好
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerPreferenceResult'
+    put:
+      tags: [玩家端-偏好]
+      summary: 保存当前玩家偏好
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerPreferenceRequest'
+            example:
+              city: 上海
+              scriptType: 硬核
+              priceMin: 60
+              priceMax: 120
+              timeSlot: WEEKEND_NIGHT
+              minMembers: 4
+              maxMembers: 6
+      responses:
+        '200':
+          description: 玩家偏好
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerPreferenceResult'
+
+  /api/player/shop/list:
+    get:
+      tags: [玩家端-店铺]
+      summary: 玩家端店铺列表
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - name: keyword
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 店铺列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopListResult'
+
+  /api/player/shop/{shopId}:
+    get:
+      tags: [玩家端-店铺]
+      summary: 玩家端店铺主页详情
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      responses:
+        '200':
+          description: 店铺详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopResult'
+
+  /api/player/shop/{shopId}/scripts:
+    get:
+      tags: [玩家端-店铺]
+      summary: 玩家查看店铺剧本库
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 店铺剧本库
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResult'
+
+  /api/player/shop/{shopId}/pools:
+    get:
+      tags: [玩家端-店铺]
+      summary: 玩家查看店铺下全部店家局
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 店家局列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolListResult'
+
+  /api/player/pool/{poolId}:
+    get:
+      tags: [玩家端-拼车]
+      summary: 拼车详情
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 拼车详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolResult'
+
+  /api/player/pool/{poolId}/price:
+    put:
+      tags: [玩家端-拼车]
+      summary: 修改价格
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: number
+              format: double
+            example: 99
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/transfer-dm:
+    put:
+      tags: [玩家端-拼车]
+      summary: 转让 DM
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: integer
+              format: int64
+            example: 2
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/join:
+    post:
+      tags: [玩家端-拼车]
+      summary: 申请加入拼车
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/leave:
+    post:
+      tags: [玩家端-拼车]
+      summary: 退出/跳车
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/approve/{userId}:
+    post:
+      tags: [玩家端-拼车]
+      summary: 发布人通过申请
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/reject/{userId}:
+    post:
+      tags: [玩家端-拼车]
+      summary: 发布人拒绝申请
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/complete:
+    post:
+      tags: [玩家端-拼车]
+      summary: 发起拼车成功确认
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 确认进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResult'
+
+  /api/player/pool/{poolId}/confirm:
+    post:
+      tags: [玩家端-拼车]
+      summary: 提交确认
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmRequest'
+            example:
+              confirmed: true
+      responses:
+        '200':
+          description: 确认进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResult'
+
+  /api/player/pool/{poolId}/finish:
+    post:
+      tags: [玩家端-拼车]
+      summary: 发起剧本杀完成确认
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 确认进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResult'
+
+  /api/player/pool/{poolId}/members:
+    get:
+      tags: [玩家端-拼车]
+      summary: 拼车成员列表
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 成员列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberListResult'
+
+  /api/player/pool/{poolId}/role/select:
+    post:
+      tags: [玩家端-拼车]
+      summary: 选择剧本角色
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleSelectRequest'
+            example:
+              roleName: 侦探
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/pool/{poolId}/roles:
+    get:
+      tags: [玩家端-拼车]
+      summary: 角色列表及选择状态
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 角色选择状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleStatusListResult'
+
+  /api/player/order/create:
+    post:
+      tags: [玩家端-订单]
+      summary: 创建订单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreateRequest'
+            example:
+              poolId: 1
+              type: 0
+      responses:
+        '200':
+          description: 订单信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResult'
+
+  /api/player/order/pay/{orderNo}:
+    post:
+      tags: [玩家端-订单]
+      summary: 模拟支付
+      parameters:
+        - name: orderNo
+          in: path
+          required: true
+          schema:
+            type: string
+          example: '202605210001'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/order/my:
+    get:
+      tags: [玩家端-订单]
+      summary: 我的订单
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: 0-押金 1-车费
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: 0-待支付 1-已支付 2-已退款 3-已扣留 4-逾期
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 我的订单列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderListResult'
+
+  /api/player/credit/score:
+    get:
+      tags: [玩家端-信用]
+      summary: 我的信用分
+      responses:
+        '200':
+          description: 信用分
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegerResult'
+
+  /api/player/credit/log:
+    get:
+      tags: [玩家端-信用]
+      summary: 信用分流水
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 信用流水
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditLogListResult'
+
+  /api/player/review/create:
+    post:
+      tags: [玩家端-评价]
+      summary: 提交评价
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewCreateRequest'
+            example:
+              poolId: 1
+              targetId: 1
+              type: 1
+              score: 5
+              content: 体验很好
+              tags: 准时,逻辑清晰
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/review/my-dm:
+    get:
+      tags: [玩家端-评价]
+      summary: 我作为 DM 收到的评价
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 评价列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewListResult'
+
+  /api/player/message/list:
+    get:
+      tags: [玩家端-消息]
+      summary: 消息列表
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: isRead
+          in: query
+          required: false
+          schema:
+            type: integer
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 消息列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResult'
+
+  /api/player/message/unread-count:
+    get:
+      tags: [玩家端-消息]
+      summary: 未读消息数
+      responses:
+        '200':
+          description: 未读数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegerResult'
+
+  /api/player/message/read/{msgId}:
+    put:
+      tags: [玩家端-消息]
+      summary: 标记单条消息已读
+      parameters:
+        - name: msgId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/message/read-all:
+    put:
+      tags: [玩家端-消息]
+      summary: 全部消息已读
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/chat/send:
+    post:
+      tags: [玩家端-群聊]
+      summary: 发送群聊消息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatSendRequest'
+            example:
+              pool_id: 1
+              content: 大家几点到？
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/player/chat/history:
+    get:
+      tags: [玩家端-群聊]
+      summary: 群聊历史
+      parameters:
+        - name: poolId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 群聊历史
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessageListResult'
+
+  /api/shop/user/me:
+    get:
+      tags: [店家端-用户]
+      summary: 当前店家账号信息
+      responses:
+        '200':
+          description: 店家账号信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResult'
+    put:
+      tags: [店家端-用户]
+      summary: 修改店家账号信息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/create:
+    post:
+      tags: [店家端-店铺]
+      summary: 创建店铺
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShopCreateRequest'
+            example:
+              name: 静安剧本杀馆
+              address: 上海市静安区南京西路XXX号
+              phone: 021-12345678
+              logo: ''
+              cover: ''
+              description: 主打硬核推理和情感本
+              openingHours: 10:00-22:00
+              city: 上海
+      responses:
+        '200':
+          description: 店铺信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopResult'
+
+  /api/shop/my:
+    get:
+      tags: [店家端-店铺]
+      summary: 我的店铺信息
+      responses:
+        '200':
+          description: 店铺信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopResult'
+
+  /api/shop/current:
+    get:
+      tags: [店家端-店铺]
+      summary: 当前店家账号绑定店铺
+      responses:
+        '200':
+          description: 当前绑定店铺
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopResult'
+
+  /api/shop/update:
+    put:
+      tags: [店家端-店铺]
+      summary: 修改店铺信息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShopUpdateRequest'
+      responses:
+        '200':
+          description: 店铺信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopResult'
+
+  /api/shop/search:
+    get:
+      tags: [店家端-店铺]
+      summary: 搜索店铺
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 店铺列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopListResult'
+
+  /api/shop/join:
+    post:
+      tags: [店家端-店铺]
+      summary: 申请加入店铺
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShopJoinRequest'
+            example:
+              shopId: 1
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/{shopId}/members:
+    get:
+      tags: [店家端-店铺]
+      summary: 店铺成员列表
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      responses:
+        '200':
+          description: 店铺成员列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopMemberListResult'
+
+  /api/shop/{shopId}/members/add:
+    post:
+      tags: [店家端-店铺]
+      summary: 添加店铺成员
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: integer
+              format: int64
+            example: 3
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/{shopId}/members/remove:
+    post:
+      tags: [店家端-店铺]
+      summary: 移除店铺成员
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: integer
+              format: int64
+            example: 3
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/{shopId}/members/role:
+    put:
+      tags: [店家端-店铺]
+      summary: 设置店铺成员角色
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetMemberRoleRequest'
+            example:
+              userId: 3
+              role: 2
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/script/list:
+    get:
+      tags: [店家端-剧本]
+      summary: 系统剧本库
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 剧本列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResult'
+
+  /api/shop/script/{shopId}/scripts:
+    get:
+      tags: [店家端-剧本]
+      summary: 店铺剧本库
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      responses:
+        '200':
+          description: 店铺剧本库
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResult'
+
+  /api/shop/script/{shopId}/scripts/add:
+    post:
+      tags: [店家端-剧本]
+      summary: 添加剧本到店铺
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddShopScriptRequest'
+            example:
+              scriptId: 1
+              price: 88
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/script/{shopId}/scripts/{scriptId}:
+    delete:
+      tags: [店家端-剧本]
+      summary: 移除店铺剧本
+      parameters:
+        - $ref: '#/components/parameters/ShopId'
+        - $ref: '#/components/parameters/ScriptId'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/pool/create:
+    post:
+      tags: [店家端-拼车]
+      summary: 发布店家局
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PoolCreateRequest'
+            example:
+              shopId: 1
+              scriptId: 1
+              scriptName: 年轮
+              scriptType: 硬核
+              city: 上海
+              address: 静安区南京西路XX号
+              startTime: '2026-06-02 14:00:00'
+              endTime: '2026-06-02 18:00:00'
+              maxMembers: 6
+              price: 88
+              deposit: 10
+              joinType: 1
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolResult'
+
+  /api/shop/pool/list:
+    get:
+      tags: [店家端-拼车]
+      summary: 店家局列表
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/ScriptType'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/PriceMin'
+        - $ref: '#/components/parameters/PriceMax'
+        - $ref: '#/components/parameters/StartTimeAfter'
+        - $ref: '#/components/parameters/StartTimeBefore'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 店家局列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolListResult'
+
+  /api/shop/pool/{poolId}:
+    get:
+      tags: [店家端-拼车]
+      summary: 店家局详情
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 拼车详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoolResult'
+
+  /api/shop/pool/{poolId}/assign-dm:
+    post:
+      tags: [店家端-拼车]
+      summary: 指派 DM
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignDmRequest'
+            example:
+              poolId: 1
+              dmId: 2
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/pool/{poolId}/complete:
+    post:
+      tags: [店家端-拼车]
+      summary: 发起拼车成功确认
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 确认进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResult'
+
+  /api/shop/pool/{poolId}/confirm:
+    post:
+      tags: [店家端-拼车]
+      summary: 提交确认
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmRequest'
+            example:
+              confirmed: true
+      responses:
+        '200':
+          description: 确认进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResult'
+
+  /api/shop/pool/{poolId}/finish:
+    post:
+      tags: [店家端-拼车]
+      summary: 发起剧本杀完成确认
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 确认进度
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResult'
+
+  /api/shop/pool/{poolId}/members:
+    get:
+      tags: [店家端-拼车]
+      summary: 店家局成员列表
+      parameters:
+        - $ref: '#/components/parameters/PoolId'
+      responses:
+        '200':
+          description: 成员列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberListResult'
+
+  /api/shop/order/list:
+    get:
+      tags: [店家端-订单]
+      summary: 店铺订单列表
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: integer
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 店铺订单列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderListResult'
+
+  /api/shop/review/my:
+    get:
+      tags: [店家端-评价]
+      summary: 我的店铺评价
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 评价列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewListResult'
+
+  /api/shop/chat/send:
+    post:
+      tags: [店家端-群聊]
+      summary: 发送群聊消息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatSendRequest'
+            example:
+              pool_id: 1
+              content: 欢迎大家准时到店
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/shop/chat/history:
+    get:
+      tags: [店家端-群聊]
+      summary: 群聊历史
+      parameters:
+        - name: poolId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 群聊历史
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessageListResult'
+
+  /api/admin/script/create:
+    post:
+      tags: [管理端-剧本]
+      summary: 创建剧本
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptCreateRequest'
+            example:
+              name: 年轮
+              type: 硬核
+              difficulty: 2
+              minPlayers: 4
+              maxPlayers: 6
+              duration: 240
+              roles: '[{"name":"侦探"}]'
+              cover: ''
+              priceRef: 88
+              description: 硬核推理本
+      responses:
+        '200':
+          description: 剧本信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptResult'
+
+  /api/admin/script/{scriptId}:
+    put:
+      tags: [管理端-剧本]
+      summary: 修改剧本
+      parameters:
+        - $ref: '#/components/parameters/ScriptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptCreateRequest'
+      responses:
+        '200':
+          description: 剧本信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptResult'
+    delete:
+      tags: [管理端-剧本]
+      summary: 下架/删除剧本
+      parameters:
+        - $ref: '#/components/parameters/ScriptId'
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+  /api/admin/script/list:
+    get:
+      tags: [管理端-剧本]
+      summary: 剧本列表
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 剧本列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResult'
+
+  /api/admin/user/list:
+    get:
+      tags: [管理端-用户]
+      summary: 用户列表
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: 0-玩家 1-店家 2-管理员
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: integer
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 用户列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResult'
+
+  /api/admin/user/{userId}/status:
+    put:
+      tags: [管理端-用户]
+      summary: 修改用户状态
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: integer
+            example: 1
+      responses:
+        '200':
+          $ref: '#/components/responses/Ok'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    PoolId:
+      name: poolId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+      example: 1
+    ShopId:
+      name: shopId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+      example: 1
+    ScriptId:
+      name: scriptId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+      example: 1
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+      example: 2
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 1
+      example: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        default: 10
+      example: 10
+    City:
+      name: city
+      in: query
+      required: false
+      schema:
+        type: string
+      example: 上海
+    ScriptType:
+      name: scriptType
+      in: query
+      required: false
+      schema:
+        type: string
+      example: 硬核
+    Status:
+      name: status
+      in: query
+      required: false
+      schema:
+        type: integer
+    PriceMin:
+      name: priceMin
+      in: query
+      required: false
+      schema:
+        type: number
+        format: double
+    PriceMax:
+      name: priceMax
+      in: query
+      required: false
+      schema:
+        type: number
+        format: double
+    StartTimeAfter:
+      name: startTimeAfter
+      in: query
+      required: false
+      schema:
+        type: string
+      example: '2026-06-01 00:00:00'
+    StartTimeBefore:
+      name: startTimeBefore
+      in: query
+      required: false
+      schema:
+        type: string
+      example: '2026-06-30 23:59:59'
+    Recommend:
+      name: recommend
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: false
+
+  responses:
+    Ok:
+      description: 操作成功
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/BaseResult'
+
+  schemas:
+    BaseResult:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 200
+        message:
+          type: string
+          example: success
+        data:
+          nullable: true
+
+    LoginResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/LoginVO'
+
+    UserResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/UserVO'
+
+    UserListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserVO'
+
+    PoolResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/PoolVO'
+
+    PoolListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/PoolVO'
+
+    MemberListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/MemberVO'
+
+    ConfirmResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ConfirmVO'
+
+    OrderResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/OrderVO'
+
+    OrderListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/OrderVO'
+
+    ScriptResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ScriptVO'
+
+    ScriptListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ScriptVO'
+
+    ShopResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ShopVO'
+
+    ShopListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ShopVO'
+
+    ShopMemberListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ShopMemberVO'
+
+    ReviewListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewVO'
+
+    MessageListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/MessageVO'
+
+    ChatMessageListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ChatMessageVO'
+
+    PlayerPreferenceResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/PlayerPreferenceVO'
+
+    CreditLogListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/CreditLogVO'
+
+    RoleStatusListResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/RoleStatusVO'
+
+    IntegerResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: integer
+
+    TokenRefreshResult:
+      allOf:
+        - $ref: '#/components/schemas/BaseResult'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                accessToken:
+                  type: string
+
+    RegisterRequest:
+      type: object
+      required: [phone, password, nickname, role]
+      properties:
+        phone:
+          type: string
+          example: '13800000001'
+        password:
+          type: string
+          example: abc123456
+        nickname:
+          type: string
+          example: 玩家一号
+        gender:
+          type: integer
+          example: 1
+        role:
+          type: string
+          enum: [player, shop]
+          example: player
+        city:
+          type: string
+          example: 上海
+
+    LoginRequest:
+      type: object
+      required: [phone, password]
+      properties:
+        phone:
+          type: string
+          example: '13800000001'
+        password:
+          type: string
+          example: abc123456
+
+    LoginVO:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserVO'
+
+    UserVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        phone:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+        gender:
+          type: integer
+        role:
+          type: integer
+          description: 0-玩家 1-店家 2-管理员
+        city:
+          type: string
+        preference:
+          type: string
+        creditScore:
+          type: integer
+        status:
+          type: integer
+
+    UserUpdateRequest:
+      type: object
+      properties:
+        nickname:
+          type: string
+        avatar:
+          type: string
+        gender:
+          type: integer
+        city:
+          type: string
+        preference:
+          type: string
+
+    PoolCreateRequest:
+      type: object
+      required: [scriptName, city, startTime, maxMembers]
+      properties:
+        type:
+          type: integer
+          description: 0-玩家局 1-店家局
+        scriptId:
+          type: integer
+          format: int64
+        shopId:
+          type: integer
+          format: int64
+        scriptName:
+          type: string
+        scriptType:
+          type: string
+        roles:
+          type: string
+          description: 角色列表 JSON 字符串
+        city:
+          type: string
+        address:
+          type: string
+        startTime:
+          type: string
+          example: '2026-06-01 14:00:00'
+        endTime:
+          type: string
+          example: '2026-06-01 18:00:00'
+        maxMembers:
+          type: integer
+        price:
+          type: number
+          format: double
+        deposit:
+          type: number
+          format: double
+        joinType:
+          type: integer
+          description: 0-审核制 1-自动通过
+        dmId:
+          type: integer
+          format: int64
+
+    PoolVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        type:
+          type: integer
+        ownerId:
+          type: integer
+          format: int64
+        shopId:
+          type: integer
+          format: int64
+        scriptId:
+          type: integer
+          format: int64
+        scriptName:
+          type: string
+        scriptType:
+          type: string
+        city:
+          type: string
+        address:
+          type: string
+        startTime:
+          type: string
+        endTime:
+          type: string
+        maxMembers:
+          type: integer
+        currentMembers:
+          type: integer
+        price:
+          type: number
+        deposit:
+          type: number
+        dmId:
+          type: integer
+          format: int64
+        joinType:
+          type: integer
+        status:
+          type: integer
+          description: 0-开放 1-满员 2-拼车成功 3-剧本杀完成 4-已取消
+
+    MemberVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        userId:
+          type: integer
+          format: int64
+        nickname:
+          type: string
+        avatar:
+          type: string
+        role:
+          type: integer
+        status:
+          type: integer
+        selectedRole:
+          type: string
+        joinTime:
+          type: string
+
+    ConfirmRequest:
+      type: object
+      required: [confirmed]
+      properties:
+        confirmed:
+          type: boolean
+
+    ConfirmVO:
+      type: object
+      properties:
+        poolId:
+          type: integer
+          format: int64
+        confirmedCount:
+          type: integer
+        totalCount:
+          type: integer
+        completed:
+          type: boolean
+
+    RoleSelectRequest:
+      type: object
+      required: [roleName]
+      properties:
+        roleName:
+          type: string
+
+    RoleStatusVO:
+      type: object
+      properties:
+        roleName:
+          type: string
+        selected:
+          type: boolean
+        userId:
+          type: integer
+          format: int64
+        nickname:
+          type: string
+
+    OrderCreateRequest:
+      type: object
+      required: [poolId, type]
+      properties:
+        poolId:
+          type: integer
+          format: int64
+        type:
+          type: integer
+          description: 0-押金 1-车费
+        payeeId:
+          type: integer
+          format: int64
+        payeeType:
+          type: integer
+
+    OrderVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        orderNo:
+          type: string
+        userId:
+          type: integer
+          format: int64
+        poolId:
+          type: integer
+          format: int64
+        type:
+          type: integer
+        amount:
+          type: number
+        status:
+          type: integer
+        payeeId:
+          type: integer
+          format: int64
+        payeeType:
+          type: integer
+        releaseStatus:
+          type: integer
+        payTime:
+          type: string
+
+    ReviewCreateRequest:
+      type: object
+      required: [poolId, targetId, score]
+      properties:
+        poolId:
+          type: integer
+          format: int64
+        targetId:
+          type: integer
+          format: int64
+          description: type=0 存 shop_id，type=1 存 dm_user_id
+        type:
+          type: integer
+          description: 0-评价店家 1-评价DM
+        score:
+          type: integer
+          minimum: 1
+          maximum: 5
+        content:
+          type: string
+        tags:
+          type: string
+
+    ReviewVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        poolId:
+          type: integer
+          format: int64
+        fromUserId:
+          type: integer
+          format: int64
+        targetId:
+          type: integer
+          format: int64
+        type:
+          type: integer
+        score:
+          type: integer
+        content:
+          type: string
+        tags:
+          type: string
+        createTime:
+          type: string
+
+    MessageVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        type:
+          type: integer
+        title:
+          type: string
+        content:
+          type: string
+        relatedId:
+          type: integer
+          format: int64
+        isRead:
+          type: integer
+        createTime:
+          type: string
+
+    ChatMessageVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        poolId:
+          type: integer
+          format: int64
+        senderId:
+          type: integer
+          format: int64
+        senderName:
+          type: string
+        senderRole:
+          type: string
+          example: player
+        content:
+          type: string
+        createTime:
+          type: string
+
+    PlayerPreferenceVO:
+      type: object
+      properties:
+        city:
+          type: string
+          nullable: true
+        scriptType:
+          type: string
+          nullable: true
+        priceMin:
+          type: number
+          nullable: true
+        priceMax:
+          type: number
+          nullable: true
+        timeSlot:
+          type: string
+          nullable: true
+        minMembers:
+          type: integer
+          nullable: true
+        maxMembers:
+          type: integer
+          nullable: true
+
+    CreditLogVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        userId:
+          type: integer
+          format: int64
+        change:
+          type: integer
+        balance:
+          type: integer
+        reason:
+          type: string
+        createTime:
+          type: string
+
+    ChatSendRequest:
+      type: object
+      required: [pool_id, content]
+      properties:
+        pool_id:
+          type: integer
+          format: int64
+        content:
+          type: string
+
+    PlayerPreferenceRequest:
+      type: object
+      properties:
+        city:
+          type: string
+        scriptType:
+          type: string
+        priceMin:
+          type: number
+        priceMax:
+          type: number
+        timeSlot:
+          type: string
+        minMembers:
+          type: integer
+        maxMembers:
+          type: integer
+
+    ShopCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        phone:
+          type: string
+        logo:
+          type: string
+        cover:
+          type: string
+        description:
+          type: string
+        openingHours:
+          type: string
+        city:
+          type: string
+
+    ShopUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        phone:
+          type: string
+        logo:
+          type: string
+        cover:
+          type: string
+        description:
+          type: string
+        openingHours:
+          type: string
+        city:
+          type: string
+
+    ShopJoinRequest:
+      type: object
+      required: [shopId]
+      properties:
+        shopId:
+          type: integer
+          format: int64
+
+    SetMemberRoleRequest:
+      type: object
+      required: [userId, role]
+      properties:
+        userId:
+          type: integer
+          format: int64
+        role:
+          type: integer
+          description: 2-管理员 3-普通成员
+
+    ShopVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        address:
+          type: string
+        phone:
+          type: string
+        logo:
+          type: string
+        cover:
+          type: string
+        description:
+          type: string
+        openingHours:
+          type: string
+        city:
+          type: string
+        status:
+          type: integer
+
+    ShopMemberVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        shopId:
+          type: integer
+          format: int64
+        userId:
+          type: integer
+          format: int64
+        nickname:
+          type: string
+        role:
+          type: integer
+        status:
+          type: integer
+
+    AddShopScriptRequest:
+      type: object
+      required: [scriptId]
+      properties:
+        scriptId:
+          type: integer
+          format: int64
+        price:
+          type: number
+          format: double
+
+    AssignDmRequest:
+      type: object
+      required: [poolId, dmId]
+      properties:
+        poolId:
+          type: integer
+          format: int64
+        dmId:
+          type: integer
+          format: int64
+
+    ScriptCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        difficulty:
+          type: integer
+        minPlayers:
+          type: integer
+        maxPlayers:
+          type: integer
+        duration:
+          type: integer
+        roles:
+          type: string
+        cover:
+          type: string
+        priceRef:
+          type: number
+          format: double
+        description:
+          type: string
+
+    ScriptVO:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        type:
+          type: string
+        difficulty:
+          type: integer
+        minPlayers:
+          type: integer
+        maxPlayers:
+          type: integer
+        duration:
+          type: integer
+        roles:
+          type: string
+        cover:
+          type: string
+        priceRef:
+          type: number
+        description:
+          type: string
+        status:
+          type: integer

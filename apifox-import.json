@@ -1,0 +1,804 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "剧本杀拼车系统 API",
+    "version": "1.1.0",
+    "description": "剧本杀拼车系统后端接口文档。带 🔒 标记的接口需要 JWT Bearer Token。\n\n注意：\n- 列表接口返回 `List<T>` 而非分页对象（前端自行计算分页）\n- 字段命名统一使用**驼峰命名**（creditScore, unreadCount 等）\n- WebSocket 端点：`/ws`（STOMP 协议，连接时 Header 传 JWT）"
+  },
+  "servers": [
+    { "url": "http://localhost:8080", "description": "本地开发" }
+  ],
+  "security": [ { "bearerAuth": [] } ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "ApiResult": {
+        "type": "object",
+        "properties": {
+          "code":    { "type": "integer", "example": 200 },
+          "message": { "type": "string",  "example": "success" },
+          "data":    { "type": "object", "nullable": true }
+        }
+      },
+      "UserVO": {
+        "type": "object",
+        "properties": {
+          "id":       { "type": "integer" },
+          "phone":    { "type": "string"  },
+          "nickname": { "type": "string"  },
+          "avatar":   { "type": "string"  },
+          "gender":   { "type": "integer", "description": "0-未知 1-男 2-女" },
+          "city":     { "type": "string"  },
+          "preference":   { "type": "string", "description": "剧本偏好，逗号分隔" },
+          "creditScore":  { "type": "integer", "description": "信用分" }
+        }
+      },
+      "LoginVO": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string" },
+          "user":  { "$ref": "#/components/schemas/UserVO" }
+        }
+      },
+      "PoolCreateRequest": {
+        "type": "object",
+        "required": ["scriptName", "city", "startTime", "maxMembers"],
+        "properties": {
+          "scriptName": { "type": "string",  "example": "年轮" },
+          "scriptType": { "type": "string",  "example": "硬核" },
+          "city":       { "type": "string",  "example": "上海" },
+          "address":    { "type": "string",  "example": "静安区南京西路XX号" },
+          "longitude":  { "type": "number",  "example": 121.458 },
+          "latitude":   { "type": "number",  "example": 31.231 },
+          "startTime":  { "type": "string",  "example": "2026-06-01 14:00:00", "description": "格式 yyyy-MM-dd HH:mm:ss" },
+          "endTime":    { "type": "string",  "example": "2026-06-01 18:00:00", "description": "格式 yyyy-MM-dd HH:mm:ss" },
+          "maxMembers": { "type": "integer", "example": 6 },
+          "price":      { "type": "number",  "example": 88.00 },
+          "joinType":   { "type": "integer", "example": 1, "description": "0-审核制 1-自动通过" },
+          "roles":      { "type": "string",  "description": "角色列表 JSON 字符串" }
+        }
+      },
+      "PoolVO": {
+        "type": "object",
+        "properties": {
+          "id":              { "type": "integer" },
+          "ownerId":         { "type": "integer" },
+          "ownerNickname":   { "type": "string" },
+          "ownerAvatar":     { "type": "string" },
+          "scriptName":      { "type": "string" },
+          "scriptType":      { "type": "string" },
+          "city":            { "type": "string" },
+          "address":         { "type": "string" },
+          "longitude":       { "type": "number", "format": "double" },
+          "latitude":        { "type": "number", "format": "double" },
+          "startTime":       { "type": "string", "format": "date-time" },
+          "endTime":         { "type": "string", "format": "date-time" },
+          "maxMembers":      { "type": "integer" },
+          "currentMembers":  { "type": "integer" },
+          "price":           { "type": "number" },
+          "deposit":         { "type": "number" },
+          "joinType":        { "type": "integer", "description": "0-审核制 1-自动通过" },
+          "status":          { "type": "integer", "description": "0-开放 1-满员 2-已完成 3-已取消" },
+          "distance":        { "type": "number", "description": "与搜索坐标的距离(公里)，仅 nearby 接口返回" },
+          "members":         { "type": "array", "items": { "$ref": "#/components/schemas/MemberVO" } },
+          "createTime":      { "type": "string", "format": "date-time" },
+          "updateTime":      { "type": "string", "format": "date-time" }
+        }
+      },
+      "MemberVO": {
+        "type": "object",
+        "properties": {
+          "id":            { "type": "integer" },
+          "userId":        { "type": "integer" },
+          "nickname":      { "type": "string" },
+          "avatar":        { "type": "string" },
+          "gender":        { "type": "integer" },
+          "creditScore":   { "type": "integer" },
+          "selectedRole":  { "type": "string" },
+          "role":          { "type": "integer", "description": "0-成员 1-车主" },
+          "status":        { "type": "integer", "description": "0-待审核 1-已加入 2-已退出(跳车) 3-已拒绝 4-已完成" },
+          "joinTime":      { "type": "string", "format": "date-time" }
+        }
+      },
+      "OrderCreateRequest": {
+        "type": "object",
+        "required": ["poolId", "type"],
+        "properties": {
+          "poolId": { "type": "integer" },
+          "type":   { "type": "integer", "description": "0-押金 1-车费" }
+        }
+      },
+      "OrderVO": {
+        "type": "object",
+        "properties": {
+          "id":         { "type": "integer" },
+          "orderNo":    { "type": "string" },
+          "userId":     { "type": "integer" },
+          "poolId":     { "type": "integer" },
+          "type":       { "type": "integer", "description": "0-押金 1-车费" },
+          "amount":     { "type": "number" },
+          "status":     { "type": "integer", "description": "0-待支付 1-已支付 2-已退款 3-已扣留" },
+          "payTime":    { "type": "string", "nullable": true },
+          "refundTime": { "type": "string", "nullable": true },
+          "createTime": { "type": "string" },
+          "updateTime": { "type": "string" }
+        }
+      },
+      "ReviewCreateRequest": {
+        "type": "object",
+        "required": ["poolId", "toUserId", "score"],
+        "properties": {
+          "poolId":   { "type": "integer" },
+          "toUserId": { "type": "integer" },
+          "score":    { "type": "integer", "minimum": 1, "maximum": 5 },
+          "content":  { "type": "string" },
+          "tags":     { "type": "string", "example": "准时,气氛组" }
+        }
+      },
+      "ReviewVO": {
+        "type": "object",
+        "properties": {
+          "id":           { "type": "integer" },
+          "poolId":       { "type": "integer" },
+          "fromUserId":   { "type": "integer" },
+          "fromNickname": { "type": "string" },
+          "toUserId":     { "type": "integer" },
+          "toNickname":   { "type": "string" },
+          "score":        { "type": "integer" },
+          "content":      { "type": "string" },
+          "tags":         { "type": "string" },
+          "createTime":   { "type": "string" }
+        }
+      },
+      "MessageVO": {
+        "type": "object",
+        "properties": {
+          "id":          { "type": "integer" },
+          "type":        { "type": "integer", "description": "0-系统 1-匹配结果 2-成团 3-跳车 4-评价" },
+          "title":       { "type": "string" },
+          "content":     { "type": "string" },
+          "relatedId":   { "type": "integer" },
+          "isRead":      { "type": "integer" },
+          "createTime":  { "type": "string" }
+        }
+      },
+      "CreditLogVO": {
+        "type": "object",
+        "properties": {
+          "id":         { "type": "integer" },
+          "change":     { "type": "integer", "description": "变动值（正加负减）" },
+          "balance":    { "type": "integer", "description": "变动后余额" },
+          "reason":     { "type": "string" },
+          "createTime": { "type": "string" }
+        }
+      },
+      "RoleStatusVO": {
+        "type": "object",
+        "properties": {
+          "name":       { "type": "string", "description": "角色名" },
+          "desc":       { "type": "string", "description": "角色描述" },
+          "selected":   { "type": "boolean" },
+          "selectedBy": { "type": "integer", "description": "选择该角色的用户ID" }
+        }
+      },
+      "LocationUpdateRequest": {
+        "type": "object",
+        "required": ["longitude", "latitude"],
+        "properties": {
+          "longitude": { "type": "number", "example": 121.458 },
+          "latitude":  { "type": "number", "example": 31.231 }
+        }
+      },
+      "RoleSelectRequest": {
+        "type": "object",
+        "required": ["roleName"],
+        "properties": {
+          "roleName": { "type": "string", "example": "金运" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/user/register": {
+      "post": {
+        "tags": ["01-用户"],
+        "summary": "用户注册",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phone", "password", "nickname"],
+                "properties": {
+                  "phone":    { "type": "string", "example": "13800000001" },
+                  "password": { "type": "string", "example": "abc123456" },
+                  "nickname": { "type": "string", "example": "剧本杀手" },
+                  "gender":   { "type": "integer", "example": 1 },
+                  "city":     { "type": "string", "example": "上海" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "注册成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiResult" } } } }
+        }
+      }
+    },
+    "/api/user/login": {
+      "post": {
+        "tags": ["01-用户"],
+        "summary": "用户登录",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["phone", "password"],
+                "properties": {
+                  "phone":    { "type": "string", "example": "13800000001" },
+                  "password": { "type": "string", "example": "abc123456" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/ApiResult" },
+                    { "properties": { "data": { "$ref": "#/components/schemas/LoginVO" } } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/me": {
+      "get": {
+        "tags": ["01-用户"],
+        "summary": "获取当前用户信息  🔒",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "$ref": "#/components/schemas/UserVO" } } }
+              ]
+            } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["01-用户"],
+        "summary": "修改个人信息  🔒",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nickname":   { "type": "string" },
+                  "avatar":     { "type": "string" },
+                  "gender":     { "type": "integer" },
+                  "city":       { "type": "string" },
+                  "preference": { "type": "string", "example": "硬核,情感,欢乐" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/pool/create": {
+      "post": {
+        "tags": ["02-拼车"],
+        "summary": "发布拼车  🔒",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PoolCreateRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "创建成功",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "$ref": "#/components/schemas/PoolVO" } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/pool/list": {
+      "get": {
+        "tags": ["02-拼车"],
+        "summary": "拼车列表（筛选，返回 List）",
+        "security": [],
+        "parameters": [
+          { "name": "city",       "in": "query", "schema": { "type": "string" } },
+          { "name": "scriptName", "in": "query", "schema": { "type": "string" }, "description": "剧本名称（模糊匹配）" },
+          { "name": "scriptType", "in": "query", "schema": { "type": "string" } },
+          { "name": "status",     "in": "query", "schema": { "type": "integer" } },
+          { "name": "page",       "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size",       "in": "query", "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK，返回 List（前端自行分页）",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/PoolVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/pool/{poolId}": {
+      "get": {
+        "tags": ["02-拼车"],
+        "summary": "拼车详情（含成员列表）",
+        "security": [],
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "$ref": "#/components/schemas/PoolVO" } } }
+              ]
+            } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["02-拼车"],
+        "summary": "取消拼车  🔒（仅车主）",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "取消成功" } }
+      }
+    },
+    "/api/pool/{poolId}/join": {
+      "post": {
+        "tags": ["02-拼车"],
+        "summary": "申请加入拼车  🔒",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "加入成功（审核制返回待审核，自动通过制直接加入）" } }
+      }
+    },
+    "/api/pool/{poolId}/leave": {
+      "post": {
+        "tags": ["02-拼车"],
+        "summary": "退出拼车（跳车）  🔒",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "退出成功（满员状态退出触发跳车惩罚）" } }
+      }
+    },
+    "/api/pool/{poolId}/approve/{userId}": {
+      "post": {
+        "tags": ["02-拼车"],
+        "summary": "车主通过申请  🔒",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "已通过" } }
+      }
+    },
+    "/api/pool/{poolId}/reject/{userId}": {
+      "post": {
+        "tags": ["02-拼车"],
+        "summary": "车主拒绝申请  🔒",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "已拒绝" } }
+      }
+    },
+    "/api/pool/{poolId}/members": {
+      "get": {
+        "tags": ["02-拼车"],
+        "summary": "获取成员列表",
+        "security": [],
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/MemberVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/pool/{poolId}/location": {
+      "put": {
+        "tags": ["02-拼车"],
+        "summary": "设置/更新拼车地点坐标  🔒",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LocationUpdateRequest" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "更新成功（同时写入 Redis Geo）" } }
+      }
+    },
+    "/api/pool/{poolId}/role/select": {
+      "post": {
+        "tags": ["02-拼车"],
+        "summary": "选择剧本角色  🔒",
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RoleSelectRequest" }
+            }
+          }
+        },
+        "responses": { "200": { "description": "选角成功（HSETNX 原子性防止多选）" } }
+      }
+    },
+    "/api/pool/{poolId}/roles": {
+      "get": {
+        "tags": ["02-拼车"],
+        "summary": "获取剧本角色列表及被选状态",
+        "security": [],
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "返回角色列表",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/RoleStatusVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/pool/nearby": {
+      "get": {
+        "tags": ["02-拼车"],
+        "summary": "附近拼车（LBS，按距离排序）",
+        "security": [],
+        "parameters": [
+          { "name": "lng",    "in": "query", "required": true, "schema": { "type": "number", "example": 121.458 } },
+          { "name": "lat",    "in": "query", "required": true, "schema": { "type": "number", "example": 31.231 } },
+          { "name": "radius", "in": "query", "schema": { "type": "number", "default": 5, "description": "搜索半径(公里)" } },
+          { "name": "page",   "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size",   "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/PoolVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/order/create": {
+      "post": {
+        "tags": ["03-订单"],
+        "summary": "创建押金/车费订单  🔒",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderCreateRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "$ref": "#/components/schemas/OrderVO" } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/order/pay/{orderNo}": {
+      "post": {
+        "tags": ["03-订单"],
+        "summary": "模拟支付  🔒",
+        "parameters": [
+          { "name": "orderNo", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "支付成功（状态变为 PAID）" } }
+      }
+    },
+    "/api/order/refund/{orderNo}": {
+      "post": {
+        "tags": ["03-订单"],
+        "summary": "退款  🔒",
+        "parameters": [
+          { "name": "orderNo", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "退款成功" } }
+      }
+    },
+    "/api/order/my": {
+      "get": {
+        "tags": ["03-订单"],
+        "summary": "我的订单列表  🔒",
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "integer" } },
+          { "name": "page",   "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size",   "in": "query", "schema": { "type": "integer", "default": 10 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "返回 List（前端自行分页）",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/OrderVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/order/{orderNo}": {
+      "get": {
+        "tags": ["03-订单"],
+        "summary": "订单详情  🔒",
+        "parameters": [
+          { "name": "orderNo", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "$ref": "#/components/schemas/OrderVO" } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/credit/score": {
+      "get": {
+        "tags": ["04-信用分"],
+        "summary": "我的信用分  🔒",
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "object", "properties": {
+                  "creditScore": { "type": "integer", "example": 95 }
+                } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/credit/log": {
+      "get": {
+        "tags": ["04-信用分"],
+        "summary": "信用分变更记录  🔒",
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/CreditLogVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/credit/rank": {
+      "get": {
+        "tags": ["04-信用分"],
+        "summary": "信用分排行榜",
+        "security": [],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redis Zset 排行榜",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "type": "object", "properties": {
+                  "userId":   { "type": "integer" },
+                  "nickname": { "type": "string" },
+                  "score":    { "type": "integer" }
+                } } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/review/create": {
+      "post": {
+        "tags": ["06-评价"],
+        "summary": "提交评价  🔒",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReviewCreateRequest" } } }
+        },
+        "responses": { "200": { "description": "评价成功" } }
+      }
+    },
+    "/api/review/pool/{poolId}": {
+      "get": {
+        "tags": ["06-评价"],
+        "summary": "某拼车的评价列表（匿名）",
+        "security": [],
+        "parameters": [
+          { "name": "poolId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/ReviewVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/review/user/{userId}/summary": {
+      "get": {
+        "tags": ["06-评价"],
+        "summary": "用户评价汇总",
+        "security": [],
+        "parameters": [
+          { "name": "userId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "返回评分汇总（平均分等）",
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "object" } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/message/list": {
+      "get": {
+        "tags": ["07-消息"],
+        "summary": "消息列表  🔒",
+        "parameters": [
+          { "name": "type",  "in": "query", "schema": { "type": "integer" } },
+          { "name": "page",  "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "size",  "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "array", "items": { "$ref": "#/components/schemas/MessageVO" } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/message/unread-count": {
+      "get": {
+        "tags": ["07-消息"],
+        "summary": "未读消息数  🔒",
+        "responses": {
+          "200": {
+            "content": { "application/json": { "schema": {
+              "allOf": [
+                { "$ref": "#/components/schemas/ApiResult" },
+                { "properties": { "data": { "type": "object", "properties": {
+                  "unreadCount": { "type": "integer", "example": 5 }
+                } } } }
+              ]
+            } } }
+          }
+        }
+      }
+    },
+    "/api/message/read/{msgId}": {
+      "put": {
+        "tags": ["07-消息"],
+        "summary": "标记已读  🔒",
+        "parameters": [
+          { "name": "msgId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/message/read-all": {
+      "put": {
+        "tags": ["07-消息"],
+        "summary": "全部已读  🔒",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/chat/send": {
+      "post": {
+        "tags": ["08-群聊"],
+        "summary": "发送群聊消息  🔒（WebSocket 广播）",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["pool_id", "content"],
+                "properties": {
+                  "pool_id": { "type": "integer" },
+                  "content": { "type": "string", "example": "有人要换角色吗？" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "发送成功（持久化 + WebSocket 广播到 /topic/pool/{poolId}/chat）" } }
+      }
+    }
+  }
+}
