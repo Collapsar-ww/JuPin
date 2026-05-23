@@ -15,7 +15,7 @@
       <span>💰 ¥{{ formatPrice(pool.price) }}</span>
     </div>
     <div class="pool-card-footer">
-      <span class="pool-owner">发布人：{{ pool.ownerName }}</span>
+      <span class="pool-owner">发布人：{{ pool.ownerNickname }}</span>
     </div>
   </el-card>
 </template>

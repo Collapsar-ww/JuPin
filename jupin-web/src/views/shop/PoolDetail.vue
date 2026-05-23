@@ -27,7 +27,7 @@
         <el-descriptions-item label="人数进度">{{ pool.currentMembers }}/{{ pool.maxMembers }}</el-descriptions-item>
         <el-descriptions-item label="人均费用">¥{{ formatPrice(pool.price) }}</el-descriptions-item>
         <el-descriptions-item label="押金">¥{{ formatPrice(pool.deposit) }}</el-descriptions-item>
-        <el-descriptions-item label="DM">{{ pool.dmName || '待指定' }}</el-descriptions-item>
+        <el-descriptions-item label="DM">{{ pool.dmNickname || '待指定' }}</el-descriptions-item>
       </el-descriptions>
 
       <h4 style="margin: 20px 0 8px">成员列表</h4>

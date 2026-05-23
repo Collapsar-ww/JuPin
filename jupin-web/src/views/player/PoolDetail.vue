@@ -41,8 +41,8 @@
         <el-descriptions-item label="人数进度">{{ pool.currentMembers }}/{{ pool.maxMembers }}</el-descriptions-item>
         <el-descriptions-item label="人均费用">¥{{ formatPrice(pool.price) }}</el-descriptions-item>
         <el-descriptions-item label="押金">¥{{ formatPrice(pool.deposit) }}</el-descriptions-item>
-        <el-descriptions-item label="发布人">{{ pool.ownerName }}</el-descriptions-item>
-        <el-descriptions-item label="DM">{{ pool.dmName || '待指定' }}</el-descriptions-item>
+        <el-descriptions-item label="发布人">{{ pool.ownerNickname }}</el-descriptions-item>
+        <el-descriptions-item label="DM">{{ pool.dmNickname || '待指定' }}</el-descriptions-item>
         <el-descriptions-item label="加入方式">{{ pool.joinType === 1 ? '自动通过' : '审核制' }}</el-descriptions-item>
       </el-descriptions>
 
@@ -224,7 +224,7 @@ async function handleLeave() {
 async function loadChatHistory() {
   try {
     const res = await getChatHistory({ poolId: Number(route.params.id), page: 1, size: 50 })
-    chatMessages.value = res.data.records
+    chatMessages.value = res.data.reverse()
     await nextTick()
     if (chatRef.value) {
       chatRef.value.scrollTop = chatRef.value.scrollHeight
