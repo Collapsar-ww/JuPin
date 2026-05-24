@@ -40,7 +40,7 @@ CREATE TABLE `user` (
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_phone` (`phone`),
+  UNIQUE KEY `uk_phone_role` (`phone`, `role`),
   KEY `idx_role_status` (`role`, `status`),
   KEY `idx_city` (`city`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
