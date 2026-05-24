@@ -15,4 +15,7 @@ public class LoginRequest {
     @NotBlank(message = "密码不能为空")
     @Schema(description = "密码", example = "abc123456")
     private String password;
+
+    @Schema(description = "角色：player-玩家 shop-店家 admin-管理员", example = "player")
+    private String role;
 }

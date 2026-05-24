@@ -83,7 +83,7 @@ public class ShopController {
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size) {
         List<Shop> shops = shopService.search(city, status, page, size);
-        List<ShopVO> vos = shops.stream().map(s -> BeanUtil.copyProperties(s, ShopVO.class)).collect(Collectors.toList());
+        List<ShopVO> vos = shops.stream().map(shop -> BeanUtil.copyProperties(shop, ShopVO.class)).collect(Collectors.toList());
         return Result.success(vos);
     }
 

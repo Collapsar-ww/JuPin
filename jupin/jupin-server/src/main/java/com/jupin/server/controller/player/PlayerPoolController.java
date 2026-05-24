@@ -8,6 +8,7 @@ import com.jupin.pojo.dto.RoleSelectRequest;
 import com.jupin.pojo.entity.CarPool;
 import com.jupin.pojo.entity.PoolMember;
 import com.jupin.pojo.vo.ConfirmVO;
+import com.jupin.pojo.vo.MemberPoolVO;
 import com.jupin.pojo.vo.MemberVO;
 import com.jupin.pojo.vo.PoolVO;
 import com.jupin.pojo.vo.RoleStatusVO;
@@ -139,6 +140,12 @@ public class PlayerPoolController {
         List<PoolMember> members = poolService.getMembers(poolId);
         List<MemberVO> vos = members.stream().map(converter::toMemberVO).collect(Collectors.toList());
         return Result.success(vos);
+    }
+
+    @Operation(summary = "我的拼车成员信息  🔒")
+    @GetMapping("/my-memberships")
+    public Result<List<MemberPoolVO>> myMemberships() {
+        return Result.success(poolService.getMyMemberPools(BaseContext.getCurrentId()));
     }
 
     @Operation(summary = "选择剧本角色  🔒")

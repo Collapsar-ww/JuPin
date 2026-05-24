@@ -4,6 +4,7 @@ import com.jupin.pojo.dto.PoolCreateRequest;
 import com.jupin.pojo.entity.CarPool;
 import com.jupin.pojo.entity.PoolMember;
 import com.jupin.pojo.vo.ConfirmVO;
+import com.jupin.pojo.vo.MemberPoolVO;
 import com.jupin.pojo.vo.RoleStatusVO;
 
 import java.math.BigDecimal;
@@ -36,4 +37,6 @@ public interface PoolService {
     List<RoleStatusVO> getRoles(Long poolId);
 
     List<CarPool> listShopPools(Long shopId, Integer status, Integer page, Integer size);
+
+    List<MemberPoolVO> getMyMemberPools(Long userId);
 }
