@@ -911,6 +911,53 @@ APP_PORT=8081 docker compose up -d app
 
 #### 4. 后续运行约定
 
+---
+
+## 日期：2026-05-24
+
+### 本轮操作：前端"我的"页面修复 — 待办事项显示关联拼车、我的拼车拆分、偏好排序说明
+
+#### 1. 修复待办事项不显示关联拼车信息
+
+**问题：** 待办列表中基于订单（orders）的待支付项只显示 `订单 ¥{amount}`，没有显示关联的是哪个拼车。
+
+**修复：**
+- 新增 `poolNameMap` 计算属性，从 `memberships` 数据构建 `poolId → scriptName` 映射
+- `buildTodos()` 中订单待办项的 `desc` 改为 `${poolNameMap[o.poolId] ? `《${poolNameMap[o.poolId]}》` : ''}订单 ¥${formatPrice(o.amount)}`
+- 新增 `watch([orders, memberships], () => buildTodos())`，确保待办列表在数据变化后自动刷新
+
+#### 2. 修复"我的拼车"不显示加入/退出的拼车
+
+**问题：** 原模板只展示了发布人自己发布的拼车（`myPools`），没有展示用户作为成员加入或退出的拼车。
+
+**修复：**
+- 将 `myPools` 重命名为 `allPools`（存储所有拼车列表）
+- 新增 `ownedPools` 计算属性（`allPools` 按 `ownerId` 过滤）
+- 新增 `joinedPools` 计算属性（直接映射 `memberships`）
+- 模板拆分为"我发布的"（使用 `PoolCard` 组件）和"我参与的"（使用精简卡片，显示成员状态标签 + 拼车状态标签 `StatusTag`）
+- 成员状态标签：待审核(0)/待支付(1)/已加入(2)/已退出(3)
+- 拼车状态标签：仅在已加入/已退出时显示
+
+#### 3. 偏好排序说明
+
+**问题：** 玩家局列表页面的 `recommend` 参数在 `PoolServiceImpl.list()` 中接收但从未使用，排序始终是 `CREATE_TIME DESC`。
+
+**结论：** 这是后端功能缺失，`recommend` 参数形同虚设，需要后端实现偏好匹配和排序逻辑才能真正生效。前端无法独立修复。
+
+#### 4. 修改文件清单
+
+| 文件 | 修改内容 |
+|------|---------|
+| `jupin-web/src/views/player/MyPage.vue` | 新增 `poolNameMap` 计算属性、`watch` 自动刷新、`ownedPools`/`joinedPools` 计算属性、模板拆分、CSS 样式、导入 `watch`/`StatusTag` |
+
+#### 5. 当前前端待处理问题
+
+- 偏好排序（后端 `recommend` 未实现）
+- 加入拼车后未支付押金的待办项仍可能缺失（#5）
+- 缺少 DM 评价展示入口（#14）
+- 账号系统角色前置选择（#15）
+- 店家端缺少"我的"页面（#19）
+
 如果完全使用 Docker 跑后端，先停止本地 Java 后端，然后直接运行：
 
 ```bash
