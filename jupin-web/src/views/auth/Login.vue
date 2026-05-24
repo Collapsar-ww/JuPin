@@ -3,27 +3,66 @@
     <div class="auth-card">
       <h2 class="auth-title">JuPin 聚拼</h2>
       <p class="auth-subtitle">玩家组局、店家开局，一站式剧本杀拼车</p>
-      <el-tabs v-model="activeTab" class="auth-tabs">
-        <el-tab-pane label="密码登录" name="password">
-          <el-form ref="formRef" :model="form" :rules="rules" label-width="0">
-            <el-form-item prop="phone">
-              <el-input v-model="form.phone" placeholder="手机号" size="large" />
-            </el-form-item>
-            <el-form-item prop="password">
-              <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" size="large" style="width: 100%" :loading="loading" @click="handleLogin">
-                登录
-              </el-button>
-            </el-form-item>
-          </el-form>
-          <div class="auth-footer">
-            还没有账号？
-            <router-link to="/register">立即注册</router-link>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
+
+      <!-- Step 1: Role Selection -->
+      <div v-if="step === 1" class="role-select">
+        <div
+          class="role-card"
+          :class="{ active: form.role === 'player' }"
+          @click="form.role = 'player'"
+        >
+          <h3>我是玩家</h3>
+          <p>参与或发起拼车，与好友一起玩剧本杀</p>
+        </div>
+        <div
+          class="role-card"
+          :class="{ active: form.role === 'shop' }"
+          @click="form.role = 'shop'"
+        >
+          <h3>我是店家</h3>
+          <p>经营店铺，发布店铺拼车，管理剧本和成员</p>
+        </div>
+        <el-button
+          type="primary"
+          size="large"
+          style="width: 100%; margin-top: 16px"
+          :disabled="!form.role"
+          @click="step = 2"
+        >
+          登录
+        </el-button>
+        <div class="auth-footer" style="margin-top: 16px">
+          还没有账号？
+          <router-link to="/register">立即注册</router-link>
+        </div>
+      </div>
+
+      <!-- Step 2: Login Form -->
+      <template v-else>
+        <el-button text @click="step = 1" style="margin-bottom: 8px; padding: 0">
+          ← 切换角色
+        </el-button>
+        <div class="selected-role-tag">
+          当前登录：<strong>{{ form.role === 'player' ? '玩家' : '店家' }}</strong>
+        </div>
+        <el-form ref="formRef" :model="form" :rules="rules" label-width="0" style="margin-top: 16px">
+          <el-form-item prop="phone">
+            <el-input v-model="form.phone" placeholder="手机号" size="large" />
+          </el-form-item>
+          <el-form-item prop="password">
+            <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" size="large" style="width: 100%" :loading="loading" @click="handleLogin">
+              登录
+            </el-button>
+          </el-form-item>
+        </el-form>
+        <div class="auth-footer">
+          还没有账号？
+          <router-link to="/register">立即注册</router-link>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -39,13 +78,14 @@ import { useAuthStore } from '../../stores/auth'
 const router = useRouter()
 const auth = useAuthStore()
 
-const activeTab = ref('password')
+const step = ref(1)
 const loading = ref(false)
 const formRef = ref<FormInstance>()
 
 const form = reactive({
   phone: '',
   password: '',
+  role: '',
 })
 
 const rules = {
@@ -58,7 +98,7 @@ async function handleLogin() {
   if (!valid) return
   loading.value = true
   try {
-    const res = await login(form)
+    const res = await login({ phone: form.phone, password: form.password, role: form.role })
     auth.setLogin(res.data)
     ElMessage.success('登录成功')
     const role = res.data.user.role
@@ -101,7 +141,19 @@ async function handleLogin() {
   color: #909399;
   margin-bottom: 24px;
 }
-.auth-tabs { margin-bottom: 16px; }
+.role-select { display: flex; flex-direction: column; gap: 12px; }
+.role-card {
+  border: 2px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.role-card:hover { border-color: #409eff; }
+.role-card.active { border-color: #409eff; background: #ecf5ff; }
+.role-card h3 { margin: 0 0 4px; font-size: 16px; }
+.role-card p { margin: 0; font-size: 13px; color: #909399; }
+.selected-role-tag { font-size: 14px; color: #606266; margin-bottom: 8px; }
 .auth-footer { text-align: center; font-size: 14px; color: #909399; }
 .auth-footer a { color: #409eff; text-decoration: none; }
 </style>

@@ -36,6 +36,10 @@
             <el-icon><InfoFilled /></el-icon>
             <span>店铺信息</span>
           </el-menu-item>
+          <el-menu-item index="/shop/my">
+            <el-icon><User /></el-icon>
+            <span>我的</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main class="layout-main">
@@ -48,7 +52,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataBoard, Reading, Plus, UserFilled, InfoFilled } from '@element-plus/icons-vue'
+import { DataBoard, Reading, Plus, UserFilled, InfoFilled, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()

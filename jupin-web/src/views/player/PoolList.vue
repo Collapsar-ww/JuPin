@@ -2,9 +2,14 @@
   <div class="player-pools">
     <div class="page-header">
       <h3>拼车列表</h3>
-      <el-button type="primary" @click="$router.push('/player/pools/create')">
-        发布拼车
-      </el-button>
+      <div class="page-header-right">
+        <el-tag v-if="recommendEnabled" size="small" type="info" effect="plain" style="margin-right: 8px">
+          已按偏好排序
+        </el-tag>
+        <el-button type="primary" @click="$router.push('/player/pools/create')">
+          发布拼车
+        </el-button>
+      </div>
     </div>
 
     <el-card class="filter-card" shadow="never">
@@ -49,6 +54,7 @@ const pools = ref<PoolListItem[]>([])
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
+const recommendEnabled = ref(true)
 
 const filters = reactive({
   city: '',
@@ -72,6 +78,7 @@ async function loadPools(p?: number) {
       page: page.value,
       size: size.value,
       type: 0,
+      recommend: recommendEnabled.value,
     })
     pools.value = res.data
   } finally {
@@ -86,5 +93,6 @@ onMounted(() => loadPools())
 .player-pools { max-width: 800px; margin: 0 auto; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .page-header h3 { margin: 0; font-size: 18px; }
+.page-header-right { display: flex; align-items: center; }
 .filter-card { margin-bottom: 16px; }
 </style>

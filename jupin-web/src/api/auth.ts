@@ -11,6 +11,7 @@ export interface RegisterRequest {
 export interface LoginRequest {
   phone: string
   password: string
+  role?: string
 }
 
 export interface UserInfo {

@@ -264,6 +264,23 @@ export function markAllRead(): Promise<ApiResult<void>> {
   return put('/player/message/read-all')
 }
 
+// === My Memberships ===
+export interface MemberPoolInfo {
+  poolId: number
+  memberStatus: number
+  poolStatus: number
+  scriptName: string
+  startTime: string
+  type: number
+  deposit: number
+  completedConfirmed: number
+  finishedConfirmed: number
+}
+
+export function getMyMemberships(): Promise<ApiResult<MemberPoolInfo[]>> {
+  return get('/player/pool/my-memberships')
+}
+
 // === Chat ===
 export function getChatHistory(params: { poolId: number; page?: number; size?: number }): Promise<ApiResult<ChatMessage[]>> {
   return get('/player/chat/history', params)
