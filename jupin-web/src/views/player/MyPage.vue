@@ -48,8 +48,24 @@
 
       <el-tab-pane label="我的拼车" name="pools">
         <div v-loading="poolLoading">
-          <PoolCard v-for="pool in myPools" :key="pool.id" :pool="pool" />
-          <el-empty v-if="myPools.length === 0" description="暂无拼车记录" />
+          <template v-if="ownedPools.length > 0">
+            <h4 style="margin: 0 0 8px">我发布的</h4>
+            <PoolCard v-for="pool in ownedPools" :key="'own-' + pool.id" :pool="pool" />
+          </template>
+          <template v-if="joinedPools.length > 0">
+            <h4 style="margin: 16px 0 8px">我参与的</h4>
+            <el-card v-for="pool in joinedPools" :key="'join-' + pool.poolId" class="joined-pool-card" shadow="hover" @click="router.push('/player/pools/' + pool.poolId)">
+              <div class="joined-pool-info">
+                <span class="pool-name">{{ pool.scriptName }}</span>
+                <el-tag v-if="pool.memberStatus === 3" size="small" type="danger">已退出</el-tag>
+                <el-tag v-else-if="pool.memberStatus === 2" size="small" type="success">已加入</el-tag>
+                <el-tag v-else-if="pool.memberStatus === 1" size="small" type="warning">待支付</el-tag>
+                <el-tag v-else-if="pool.memberStatus === 0" size="small">待审核</el-tag>
+                <StatusTag v-if="pool.memberStatus === 2 || pool.memberStatus === 3" :status="pool.poolStatus" />
+              </div>
+            </el-card>
+          </template>
+          <el-empty v-if="ownedPools.length === 0 && joinedPools.length === 0" description="暂无拼车记录" />
         </div>
       </el-tab-pane>
 
@@ -99,21 +115,44 @@
           <el-empty v-if="todos.length === 0" description="暂无待办事项" />
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="我的评价" name="reviews">
+        <div v-loading="reviewLoading">
+          <template v-if="dmReviews.length > 0">
+            <h4 style="margin: 0 0 12px">我作为 DM 收到的评价</h4>
+            <el-table :data="dmReviews" size="small" border>
+              <el-table-column label="评分" width="80">
+                <template #default="{ row }">
+                  <el-rate :model-value="row.score" disabled show-score score-template="{value}" />
+                </template>
+              </el-table-column>
+              <el-table-column prop="content" label="评价内容" min-width="200" />
+              <el-table-column label="时间" width="160">
+                <template #default="{ row }">{{ formatDateTime(row.createTime) }}</template>
+              </el-table-column>
+            </el-table>
+          </template>
+          <el-empty v-else description="暂无评价" />
+        </div>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
-import { getPlayerPoolList, getMyOrders, payOrder, getPreference, savePreference } from '../../api/player'
-import type { PoolListItem, OrderItem, Preference } from '../../api/player'
+import { getPlayerPoolList, getMyOrders, payOrder, getPreference, savePreference, getMyMemberships, getMyDmReviews } from '../../api/player'
+import type { PoolListItem, OrderItem, Preference, MemberPoolInfo } from '../../api/player'
 import { SCRIPT_TYPES, ORDER_STATUS_TEXT, ORDER_STATUS } from '../../constants'
 import PoolCard from '../../components/PoolCard.vue'
+import StatusTag from '../../components/StatusTag.vue'
 import { formatPrice, formatDateTime } from '../../utils/format'
 
 const auth = useAuthStore()
+const router = useRouter()
 
 const user = computed(() => auth.user)
 const activeTab = ref('preference')
@@ -125,7 +164,7 @@ const pref = reactive<Preference>({
 })
 
 const poolLoading = ref(false)
-const myPools = ref<PoolListItem[]>([])
+const allPools = ref<PoolListItem[]>([])
 
 const orderLoading = ref(false)
 const orders = ref<OrderItem[]>([])
@@ -134,6 +173,21 @@ const orderSize = ref(10)
 
 const todoLoading = ref(false)
 const todos = ref<any[]>([])
+const memberships = ref<MemberPoolInfo[]>([])
+const reviewLoading = ref(false)
+const dmReviews = ref<any[]>([])
+
+const ownedPools = computed(() => allPools.value.filter(p => p.ownerId === auth.user?.id))
+const joinedPools = computed(() => memberships.value)
+const poolNameMap = computed(() => {
+  const map: Record<number, string> = {}
+  for (const m of memberships.value) {
+    map[m.poolId] = m.scriptName
+  }
+  return map
+})
+
+watch([orders, memberships], () => { buildTodos() })
 
 function orderStatusTag(status: number) {
   const map: Record<number, string> = {
@@ -170,9 +224,7 @@ async function loadMyPools() {
   poolLoading.value = true
   try {
     const res = await getPlayerPoolList({ page: 1, size: 50 })
-    myPools.value = res.data.filter(
-      p => p.ownerId === auth.user?.id
-    )
+    allPools.value = res.data
   } finally {
     poolLoading.value = false
   }
@@ -201,23 +253,97 @@ async function handlePayOrder(orderNo: string) {
 
 function buildTodos() {
   const list: any[] = []
+
   for (const o of orders.value) {
     if (o.status === ORDER_STATUS.PENDING) {
       list.push({
         key: `pay-${o.orderNo}`,
         type: 'payment',
         title: `待支付${o.type === 0 ? '押金' : '车费'}`,
-        desc: `订单 ¥${formatPrice(o.amount)}`,
+        desc: `${poolNameMap.value[o.poolId] ? `《${poolNameMap.value[o.poolId]}》` : ''}订单 ¥${formatPrice(o.amount)}`,
         actionText: '去支付',
         action: () => handlePayOrder(o.orderNo),
       })
     }
   }
+
+  for (const m of memberships.value) {
+    if (m.memberStatus === 1) {
+      const hasPendingOrder = orders.value.some(o => o.poolId === m.poolId && o.type === 0 && o.status === ORDER_STATUS.PENDING)
+      if (!hasPendingOrder) {
+        list.push({
+          key: `deposit-${m.poolId}`,
+          type: 'payment',
+          title: '待支付押金',
+          desc: `《${m.scriptName}》押金 ¥${formatPrice(m.deposit)}`,
+          actionText: '去支付',
+          action: () => router.push(`/player/pools/${m.poolId}`),
+        })
+      }
+    }
+
+    if (m.memberStatus === 2) {
+      if (m.poolStatus === 1 && m.completedConfirmed === 0) {
+        list.push({
+          key: `confirm-${m.poolId}`,
+          type: 'confirm',
+          title: '待确认成团',
+          desc: `《${m.scriptName}》请确认拼车成功`,
+          actionText: '去确认',
+          action: () => router.push(`/player/pools/${m.poolId}`),
+        })
+      }
+      if (m.poolStatus === 2 && m.finishedConfirmed === 0) {
+        list.push({
+          key: `finish-${m.poolId}`,
+          type: 'confirm',
+          title: '待确认结束',
+          desc: `《${m.scriptName}》请确认剧本杀已完成`,
+          actionText: '去确认',
+          action: () => router.push(`/player/pools/${m.poolId}`),
+        })
+      }
+      if (m.poolStatus === 3) {
+        list.push({
+          key: `review-${m.poolId}`,
+          type: 'review',
+          title: '待评价',
+          desc: `《${m.scriptName}》拼车已完成，去评价`,
+          actionText: '去评价',
+          action: () => router.push(`/player/pools/${m.poolId}`),
+        })
+      }
+    }
+  }
   todos.value = list
 }
 
+async function loadMemberships() {
+  todoLoading.value = true
+  try {
+    const res = await getMyMemberships()
+    memberships.value = res.data
+  } catch {
+    // handled
+  } finally {
+    todoLoading.value = false
+  }
+}
+
+async function loadDmReviews() {
+  reviewLoading.value = true
+  try {
+    const res = await getMyDmReviews()
+    dmReviews.value = res.data
+  } catch {
+    // handled
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([loadPreference(), loadMyPools(), loadOrders()])
+  await Promise.all([loadPreference(), loadMyPools(), loadOrders(), loadMemberships(), loadDmReviews()])
   buildTodos()
 })
 </script>
@@ -236,4 +362,7 @@ onMounted(async () => {
 .todo-item:last-child { border-bottom: none; }
 .todo-title { font-size: 14px; font-weight: 500; }
 .todo-desc { font-size: 12px; color: #909399; }
+.joined-pool-card { margin-bottom: 8px; cursor: pointer; }
+.joined-pool-info { display: flex; align-items: center; gap: 8px; }
+.pool-name { font-size: 14px; }
 </style>
