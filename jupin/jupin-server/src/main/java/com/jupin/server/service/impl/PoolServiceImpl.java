@@ -5,17 +5,12 @@ import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.jupin.common.constant.ConfirmStatus;
-import com.jupin.common.constant.DbFieldConstant;
-import com.jupin.common.constant.ErrorConstant;
-import com.jupin.common.constant.MemberStatus;
-import com.jupin.common.constant.OrderStatus;
-import com.jupin.common.constant.PoolStatus;
-import com.jupin.common.constant.RedisKeyConstant;
+import com.jupin.common.constant.*;
 import com.jupin.common.exception.BaseException;
 import com.jupin.pojo.dto.PoolCreateRequest;
 import com.jupin.pojo.entity.*;
 import com.jupin.pojo.vo.ConfirmVO;
+import com.jupin.pojo.vo.MemberPoolVO;
 import com.jupin.pojo.vo.RoleStatusVO;
 import com.jupin.server.mapper.*;
 import com.jupin.server.service.CreditService;
@@ -60,7 +55,7 @@ public class PoolServiceImpl implements PoolService {
     public CarPool create(Long userId, PoolCreateRequest request) {
         User owner = userMapper.selectById(userId);
         if (owner.getCreditScore() < 60) {
-            throw new BaseException("信用分过低，无法发布拼车");
+            throw new BaseException(ErrorConstant.CREDIT_TOO_LOW);
         }
 
         Integer type = request.getType() != null ? request.getType() : 0;
@@ -81,7 +76,7 @@ public class PoolServiceImpl implements PoolService {
             if (request.getScriptId() != null) {
                 Long scriptCount = shopScriptMapper.selectCount(new QueryWrapper<ShopScript>()
                         .eq(DbFieldConstant.SHOP_ID, request.getShopId()).eq(DbFieldConstant.SCRIPT_ID, request.getScriptId()));
-                if (scriptCount == 0) throw new BaseException(ErrorConstant.SHOP_SCRIPT_NOT_IN_LIBRARY);
+                if (scriptCount == 0) throw new BaseException(ErrorConstant.SCRIPT_NOT_IN_LIBRARY);
             }
         }
 
@@ -109,14 +104,27 @@ public class PoolServiceImpl implements PoolService {
                 .build();
         poolMapper.insert(pool);
 
-        PoolMember ownerMember = PoolMember.builder()
-                .poolId(pool.getId())
-                .userId(userId)
-                .role(1)
-                .status(MemberStatus.PENDING_PAYMENT)
-                .joinTime(LocalDateTime.now())
-                .build();
-        memberMapper.insert(ownerMember);
+        if (type == 1) {
+            PoolMember ownerMember = PoolMember.builder()
+                    .poolId(pool.getId())
+                    .userId(userId)
+                    .role(1)
+                    .status(MemberStatus.JOINED)
+                    .joinTime(LocalDateTime.now())
+                    .build();
+            memberMapper.insert(ownerMember);
+            pool.setCurrentMembers(pool.getCurrentMembers() + 1);
+            poolMapper.updateById(pool);
+        } else {
+            PoolMember ownerMember = PoolMember.builder()
+                    .poolId(pool.getId())
+                    .userId(userId)
+                    .role(1)
+                    .status(MemberStatus.PENDING_PAYMENT)
+                    .joinTime(LocalDateTime.now())
+                    .build();
+            memberMapper.insert(ownerMember);
+        }
         return pool;
     }
 
@@ -132,30 +140,30 @@ public class PoolServiceImpl implements PoolService {
                                BigDecimal priceMin, BigDecimal priceMax,
                                String startTimeAfter, String startTimeBefore,
                                Boolean recommend, Integer page, Integer size) {
-        QueryWrapper<CarPool> q = new QueryWrapper<CarPool>();
-        q.in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL);
-        if (StringUtils.hasText(city)) q.eq(DbFieldConstant.CITY, city);
-        if (StringUtils.hasText(scriptType)) q.eq(DbFieldConstant.SCRIPT_TYPE, scriptType);
-        if (type != null) q.eq(DbFieldConstant.TYPE, type);
-        if (status != null) q.eq(DbFieldConstant.STATUS, status);
-        if (priceMin != null) q.ge("price", priceMin);
-        if (priceMax != null) q.le("price", priceMax);
-        if (StringUtils.hasText(startTimeAfter)) q.ge("start_time", startTimeAfter);
-        if (StringUtils.hasText(startTimeBefore)) q.le("start_time", startTimeBefore);
-        q.orderByDesc(DbFieldConstant.CREATE_TIME);
+        QueryWrapper<CarPool> queryWrapper = new QueryWrapper<CarPool>();
+        queryWrapper.in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL);
+        if (StringUtils.hasText(city)) queryWrapper.eq(DbFieldConstant.CITY, city);
+        if (StringUtils.hasText(scriptType)) queryWrapper.eq(DbFieldConstant.SCRIPT_TYPE, scriptType);
+        if (type != null) queryWrapper.eq(DbFieldConstant.TYPE, type);
+        if (status != null) queryWrapper.eq(DbFieldConstant.STATUS, status);
+        if (priceMin != null) queryWrapper.ge("price", priceMin);
+        if (priceMax != null) queryWrapper.le("price", priceMax);
+        if (StringUtils.hasText(startTimeAfter)) queryWrapper.ge("start_time", startTimeAfter);
+        if (StringUtils.hasText(startTimeBefore)) queryWrapper.le("start_time", startTimeBefore);
+        queryWrapper.orderByDesc(DbFieldConstant.CREATE_TIME);
 
-        Page<CarPool> p = poolMapper.selectPage(new Page<>(page, size), q);
-        return p.getRecords();
+        Page<CarPool> pageResult = poolMapper.selectPage(new Page<>(page, size), queryWrapper);
+        return pageResult.getRecords();
     }
 
     @Override
     public List<CarPool> listShopPools(Long shopId, Integer status, Integer page, Integer size) {
-        QueryWrapper<CarPool> q = new QueryWrapper<CarPool>()
+        QueryWrapper<CarPool> queryWrapper = new QueryWrapper<CarPool>()
                 .eq(DbFieldConstant.SHOP_ID, shopId)
                 .eq(status != null, DbFieldConstant.STATUS, status)
                 .orderByDesc(DbFieldConstant.CREATE_TIME);
-        Page<CarPool> p = poolMapper.selectPage(new Page<>(page, size), q);
-        return p.getRecords();
+        Page<CarPool> pageResult = poolMapper.selectPage(new Page<>(page, size), queryWrapper);
+        return pageResult.getRecords();
     }
 
     @Override
@@ -224,7 +232,7 @@ public class PoolServiceImpl implements PoolService {
             throw e;
         } catch (Exception e) {
             log.error("leave error pool={} user={}: ", poolId, userId, e);
-            throw new BaseException("跳车失败: " + e.getMessage());
+            throw new BaseException(ErrorConstant.LEAVE_FAILED + ": " + e.getMessage());
         }
     }
 
@@ -277,7 +285,7 @@ public class PoolServiceImpl implements PoolService {
     public void approve(Long userId, Long poolId, Long targetUserId) {
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null || !pool.getOwnerId().equals(userId)) {
-            throw new BaseException("无权限审核");
+            throw new BaseException(ErrorConstant.NO_PERMISSION_TO_REVIEW);
         }
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("status", MemberStatus.PENDING_PAYMENT)
@@ -289,7 +297,7 @@ public class PoolServiceImpl implements PoolService {
     public void reject(Long userId, Long poolId, Long targetUserId) {
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null || !pool.getOwnerId().equals(userId)) {
-            throw new BaseException("无权限审核");
+            throw new BaseException(ErrorConstant.NO_PERMISSION_TO_REVIEW);
         }
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("status", MemberStatus.REJECTED)
@@ -301,10 +309,10 @@ public class PoolServiceImpl implements PoolService {
     public void updatePrice(Long userId, Long poolId, BigDecimal price) {
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null || !pool.getOwnerId().equals(userId)) {
-            throw new BaseException("无权限修改价格");
+            throw new BaseException(ErrorConstant.NO_PERMISSION_UPDATE_PRICE);
         }
         if (pool.getStatus() != PoolStatus.OPEN && pool.getStatus() != PoolStatus.FULL) {
-            throw new BaseException("成团后不能修改价格");
+            throw new BaseException(ErrorConstant.CANNOT_UPDATE_PRICE_AFTER_COMPLETED);
         }
         pool.setPrice(price);
         poolMapper.updateById(pool);
@@ -315,18 +323,18 @@ public class PoolServiceImpl implements PoolService {
     public void transferDm(Long userId, Long poolId, Long newDmId) {
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null || !pool.getOwnerId().equals(userId)) {
-            throw new BaseException("无权限转让DM");
+            throw new BaseException(ErrorConstant.NO_PERMISSION_TRANSFER_DM);
         }
-        if (pool.getType() != 0) throw new BaseException("仅玩家局可转让DM");
+        if (pool.getType() != 0) throw new BaseException(ErrorConstant.ONLY_PLAYER_POOL_CAN_TRANSFER_DM);
         if (pool.getStatus() != PoolStatus.OPEN && pool.getStatus() != PoolStatus.FULL) {
-            throw new BaseException("成团后不能转让DM");
+            throw new BaseException(ErrorConstant.DM_CANNOT_TRANSFER_AFTER_COMPLETED);
         }
         User newDm = userMapper.selectById(newDmId);
-        if (newDm == null) throw new BaseException("用户不存在");
+        if (newDm == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
 
         Long count = memberMapper.selectCount(new QueryWrapper<PoolMember>()
                 .eq("pool_id", poolId).eq("user_id", newDmId).eq("status", MemberStatus.JOINED));
-        if (count == 0) throw new BaseException("新DM不是拼车成员");
+        if (count == 0) throw new BaseException(ErrorConstant.NEW_DM_NOT_POOL_MEMBER);
 
         pool.setDmId(newDmId);
         poolMapper.updateById(pool);
@@ -336,16 +344,16 @@ public class PoolServiceImpl implements PoolService {
     @Transactional
     public void assignDm(Long userId, Long poolId, Long dmId) {
         CarPool pool = poolMapper.selectById(poolId);
-        if (pool == null) throw new BaseException("拼车不存在");
-        if (pool.getType() != 1) throw new BaseException("仅店家局可指派DM");
+        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        if (pool.getType() != 1) throw new BaseException(ErrorConstant.ONLY_SHOP_POOL_CAN_ASSIGN_DM);
 
         Long count = shopMemberMapper.selectCount(new QueryWrapper<ShopMember>()
                 .eq("shop_id", pool.getShopId()).eq("user_id", userId).in("role", 1, 2));
-        if (count == 0) throw new BaseException("无权限指派DM");
+        if (count == 0) throw new BaseException(ErrorConstant.NO_PERMISSION_ASSIGN_DM);
 
         count = shopMemberMapper.selectCount(new QueryWrapper<ShopMember>()
                 .eq("shop_id", pool.getShopId()).eq("user_id", dmId));
-        if (count == 0) throw new BaseException("该用户不是店铺成员");
+        if (count == 0) throw new BaseException(ErrorConstant.USER_NOT_SHOP_MEMBER);
 
         pool.setDmId(dmId);
         poolMapper.updateById(pool);
@@ -355,10 +363,10 @@ public class PoolServiceImpl implements PoolService {
     @Transactional
     public ConfirmVO complete(Long userId, Long poolId) {
         CarPool pool = poolMapper.selectById(poolId);
-        if (pool == null) throw new BaseException("拼车不存在");
-        if (!pool.getOwnerId().equals(userId)) throw new BaseException("仅发布人可发起确认");
-        if (pool.getStatus() != PoolStatus.FULL) throw new BaseException("拼车未满员");
-        if (pool.getDmId() == null) throw new BaseException("未指定DM");
+        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        if (!pool.getOwnerId().equals(userId)) throw new BaseException(ErrorConstant.ONLY_OWNER_CAN_CONFIRM);
+        if (pool.getStatus() != PoolStatus.FULL) throw new BaseException(ErrorConstant.POOL_NOT_FULL);
+        if (pool.getDmId() == null) throw new BaseException(ErrorConstant.DM_NOT_SPECIFIED);
 
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("completed_confirmed", ConfirmStatus.UNCONFIRMED)
@@ -381,7 +389,7 @@ public class PoolServiceImpl implements PoolService {
             throw e;
         } catch (Exception e) {
             log.error("confirm error pool={} user={}: ", poolId, userId, e);
-            throw new BaseException("确认失败: " + e.getMessage());
+            throw new BaseException(ErrorConstant.CONFIRM_FAILED + ": " + e.getMessage());
         }
     }
 
@@ -390,16 +398,16 @@ public class PoolServiceImpl implements PoolService {
         RLock lock = redisson.getLock(lockKey);
         try {
             if (!lock.tryLock(3, 10, TimeUnit.SECONDS)) {
-                throw new BaseException("系统繁忙，请稍后再试");
+                throw new BaseException(ErrorConstant.SYSTEM_BUSY);
             }
 
             CarPool pool = poolMapper.selectById(poolId);
-            if (pool == null) throw new BaseException("拼车不存在");
+            if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
 
             PoolMember member = memberMapper.selectOne(new QueryWrapper<PoolMember>()
                     .eq("pool_id", poolId).eq("user_id", userId));
             if (member == null || member.getStatus() != MemberStatus.JOINED) {
-                throw new BaseException("你不是该拼车的正式成员");
+                throw new BaseException(ErrorConstant.NOT_POOL_FORMAL_MEMBER);
             }
 
             int confirmedCount;
@@ -407,7 +415,7 @@ public class PoolServiceImpl implements PoolService {
 
             if (pool.getStatus() == PoolStatus.FULL) {
                 if (member.getCompletedConfirmed() != ConfirmStatus.UNCONFIRMED) {
-                    throw new BaseException("你已经确认过");
+                    throw new BaseException(ErrorConstant.ALREADY_CONFIRMED);
                 }
                 int confirmValue = confirmed ? ConfirmStatus.CONFIRMED : ConfirmStatus.REJECTED;
                 member.setCompletedConfirmed(confirmValue);
@@ -417,7 +425,7 @@ public class PoolServiceImpl implements PoolService {
                 isCompleteConfirm = true;
             } else if (pool.getStatus() == PoolStatus.COMPLETED) {
                 if (member.getFinishedConfirmed() != ConfirmStatus.UNCONFIRMED) {
-                    throw new BaseException("你已经确认过");
+                    throw new BaseException(ErrorConstant.ALREADY_CONFIRMED);
                 }
                 int confirmValue = confirmed ? ConfirmStatus.CONFIRMED : ConfirmStatus.REJECTED;
                 member.setFinishedConfirmed(confirmValue);
@@ -426,23 +434,23 @@ public class PoolServiceImpl implements PoolService {
 
                 isCompleteConfirm = false;
             } else {
-                throw new BaseException("当前状态无需确认");
+                throw new BaseException(ErrorConstant.CURRENT_STATUS_NO_CONFIRM_REQUIRED);
             }
 
             List<PoolMember> allMembers = memberMapper.selectList(new QueryWrapper<PoolMember>()
                     .eq("pool_id", poolId).eq("status", MemberStatus.JOINED));
 
             if (isCompleteConfirm) {
-                confirmedCount = (int) allMembers.stream().filter(m -> m.getCompletedConfirmed() == ConfirmStatus.CONFIRMED).count();
-                boolean anyRejected = allMembers.stream().anyMatch(m -> m.getCompletedConfirmed() == ConfirmStatus.REJECTED);
+                confirmedCount = (int) allMembers.stream().filter(poolMember -> poolMember.getCompletedConfirmed() == ConfirmStatus.CONFIRMED).count();
+                boolean anyRejected = allMembers.stream().anyMatch(poolMember -> poolMember.getCompletedConfirmed() == ConfirmStatus.REJECTED);
                 if (!anyRejected && confirmedCount == allMembers.size()) {
                     stateMachine.toCompleted(poolId);
                     return new ConfirmVO(poolId, confirmedCount, allMembers.size(), true);
                 }
                 return new ConfirmVO(poolId, confirmedCount, allMembers.size(), false);
             } else {
-                confirmedCount = (int) allMembers.stream().filter(m -> m.getFinishedConfirmed() == ConfirmStatus.CONFIRMED).count();
-                long rejected = allMembers.stream().filter(m -> m.getFinishedConfirmed() == ConfirmStatus.REJECTED).count();
+                confirmedCount = (int) allMembers.stream().filter(poolMember -> poolMember.getFinishedConfirmed() == ConfirmStatus.CONFIRMED).count();
+                long rejected = allMembers.stream().filter(poolMember -> poolMember.getFinishedConfirmed() == ConfirmStatus.REJECTED).count();
 
                 boolean timeElapsed = pool.getEndTime() != null && LocalDateTime.now().isAfter(pool.getEndTime());
                 boolean allConfirmed = confirmedCount == allMembers.size();
@@ -455,7 +463,7 @@ public class PoolServiceImpl implements PoolService {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new BaseException("系统繁忙，请稍后再试");
+            throw new BaseException(ErrorConstant.SYSTEM_BUSY);
         } finally {
             if (lock.isHeldByCurrentThread()) lock.unlock();
         }
@@ -465,9 +473,9 @@ public class PoolServiceImpl implements PoolService {
     @Transactional
     public ConfirmVO finish(Long userId, Long poolId) {
         CarPool pool = poolMapper.selectById(poolId);
-        if (pool == null) throw new BaseException("拼车不存在");
-        if (!pool.getOwnerId().equals(userId)) throw new BaseException("仅发布人可发起完成确认");
-        if (pool.getStatus() != PoolStatus.COMPLETED) throw new BaseException("拼车未成功");
+        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        if (!pool.getOwnerId().equals(userId)) throw new BaseException(ErrorConstant.ONLY_OWNER_CAN_FINISH_CONFIRM);
+        if (pool.getStatus() != PoolStatus.COMPLETED) throw new BaseException(ErrorConstant.POOL_NOT_COMPLETED);
 
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("finished_confirmed", ConfirmStatus.UNCONFIRMED)
@@ -492,7 +500,7 @@ public class PoolServiceImpl implements PoolService {
         String hashKey = RedisKeyConstant.POOL_ROLE_PREFIX + poolId;
         Boolean success = stringRedis.opsForHash().putIfAbsent(hashKey, roleName, String.valueOf(userId));
         if (Boolean.FALSE.equals(success)) {
-            throw new BaseException("该角色已被选择");
+            throw new BaseException(ErrorConstant.ROLE_ALREADY_SELECTED);
         }
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("selected_role", roleName)
@@ -507,12 +515,34 @@ public class PoolServiceImpl implements PoolService {
                 new TypeReference<List<Map<String, String>>>() {}, false);
 
         Map<Object, Object> selected = stringRedis.opsForHash().entries(RedisKeyConstant.POOL_ROLE_PREFIX + poolId);
-        return roleList.stream().map(r -> {
-            String name = r.get("name");
+        return roleList.stream().map(role -> {
+            String name = role.get("name");
             boolean isSelected = selected.containsKey(name);
-            return new RoleStatusVO(name, r.get("desc"), isSelected,
+            return new RoleStatusVO(name, role.get("desc"), isSelected,
                     isSelected ? Long.valueOf((String) selected.get(name)) : null);
         }).collect(Collectors.toList());
+    }
+
+    @Override
+    public List<MemberPoolVO> getMyMemberPools(Long userId) {
+        List<PoolMember> members = memberMapper.selectList(new QueryWrapper<PoolMember>()
+                .eq(DbFieldConstant.USER_ID, userId)
+                .in(DbFieldConstant.STATUS, MemberStatus.PENDING_PAYMENT, MemberStatus.JOINED));
+        if (members.isEmpty()) return List.of();
+
+        List<Long> poolIds = members.stream().map(PoolMember::getPoolId).collect(Collectors.toList());
+        List<CarPool> pools = poolMapper.selectBatchIds(poolIds);
+
+        Map<Long, CarPool> poolMap = pools.stream().collect(Collectors.toMap(CarPool::getId, pool -> pool));
+        return members.stream()
+                .filter(member -> poolMap.containsKey(member.getPoolId()))
+                .map(member -> {
+                    CarPool pool = poolMap.get(member.getPoolId());
+                    return new MemberPoolVO(pool.getId(), member.getStatus(), pool.getStatus(),
+                            pool.getScriptName(), pool.getStartTime(), pool.getType(), pool.getDeposit(),
+                            member.getCompletedConfirmed(), member.getFinishedConfirmed());
+                })
+                .collect(Collectors.toList());
     }
 
     private int calculateLeavePenalty(LocalDateTime startTime) {

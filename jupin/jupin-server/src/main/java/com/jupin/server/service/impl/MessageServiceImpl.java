@@ -3,6 +3,7 @@ package com.jupin.server.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.jupin.common.constant.ErrorConstant;
 import com.jupin.common.exception.BaseException;
 import com.jupin.pojo.entity.Message;
 import com.jupin.server.mapper.MessageMapper;
@@ -22,11 +23,11 @@ public class MessageServiceImpl implements MessageService {
 
     @Override
     public List<Message> getList(Long userId, Integer type, Integer page, Integer size) {
-        Page<Message> p = messageMapper.selectPage(new Page<>(page, size),
+        Page<Message> pageResult = messageMapper.selectPage(new Page<>(page, size),
                 new QueryWrapper<Message>().eq("user_id", userId)
                         .eq(type != null, "type", type)
                         .orderByDesc("create_time"));
-        return p.getRecords();
+        return pageResult.getRecords();
     }
 
     @Override
@@ -38,7 +39,7 @@ public class MessageServiceImpl implements MessageService {
     @Transactional
     public void markRead(Long userId, Long msgId) {
         Message msg = messageMapper.selectById(msgId);
-        if (msg == null || !msg.getUserId().equals(userId)) throw new BaseException("消息不存在");
+        if (msg == null || !msg.getUserId().equals(userId)) throw new BaseException(ErrorConstant.MESSAGE_NOT_FOUND);
         msg.setIsRead(1);
         msg.setReadTime(LocalDateTime.now());
         messageMapper.updateById(msg);

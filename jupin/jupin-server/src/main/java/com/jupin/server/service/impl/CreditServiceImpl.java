@@ -1,6 +1,7 @@
 package com.jupin.server.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.jupin.common.constant.ErrorConstant;
 import com.jupin.common.exception.BaseException;
 import com.jupin.pojo.entity.CreditLog;
 import com.jupin.pojo.entity.User;
@@ -25,7 +26,7 @@ public class CreditServiceImpl implements CreditService {
     @Override
     public int getScore(Long userId) {
         User user = userMapper.selectById(userId);
-        if (user == null) throw new BaseException("用户不存在");
+        if (user == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
         return user.getCreditScore();
     }
 
@@ -33,7 +34,7 @@ public class CreditServiceImpl implements CreditService {
     @Transactional
     public void deduct(Long userId, int change, String reason) {
         User user = userMapper.selectById(userId);
-        if (user == null) throw new BaseException("用户不存在");
+        if (user == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
         int newScore = Math.max(0, user.getCreditScore() - Math.abs(change));
         user.setCreditScore(newScore);
         userMapper.updateById(user);
@@ -51,7 +52,7 @@ public class CreditServiceImpl implements CreditService {
     @Transactional
     public void add(Long userId, int change, String reason) {
         User user = userMapper.selectById(userId);
-        if (user == null) throw new BaseException("用户不存在");
+        if (user == null) throw new BaseException(ErrorConstant.USER_NOT_FOUND);
         int newScore = Math.min(100, user.getCreditScore() + change);
         user.setCreditScore(newScore);
         userMapper.updateById(user);

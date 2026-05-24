@@ -109,7 +109,7 @@ public class OrderServiceImpl implements OrderService {
     public void refund(String orderNo) {
         Order order = orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, orderNo));
         if (order == null) throw new BaseException(ErrorConstant.ORDER_NOT_FOUND);
-        if (order.getStatus() != OrderStatus.PAID) throw new BaseException("仅已支付订单可退款");
+        if (order.getStatus() != OrderStatus.PAID) throw new BaseException(ErrorConstant.ONLY_PAID_ORDER_CAN_REFUND);
         order.setStatus(OrderStatus.REFUNDED);
         order.setRefundTime(LocalDateTime.now());
         orderMapper.updateById(order);
@@ -120,7 +120,7 @@ public class OrderServiceImpl implements OrderService {
     public void release(Long orderId) {
         Order order = orderMapper.selectById(orderId);
         if (order == null) throw new BaseException(ErrorConstant.ORDER_NOT_FOUND);
-        if (order.getStatus() != OrderStatus.PAID) throw new BaseException("仅已支付订单可释放");
+        if (order.getStatus() != OrderStatus.PAID) throw new BaseException(ErrorConstant.ONLY_PAID_ORDER_CAN_RELEASE);
         if (order.getReleaseStatus() == 1) return;
 
         order.setReleaseStatus(1);
@@ -137,23 +137,23 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public List<Order> myOrders(Long userId, Integer type, Integer status, Integer page, Integer size) {
-        QueryWrapper<Order> q = new QueryWrapper<Order>()
+        QueryWrapper<Order> queryWrapper = new QueryWrapper<Order>()
                 .eq(DbFieldConstant.USER_ID, userId)
                 .eq(type != null, DbFieldConstant.TYPE, type)
                 .eq(status != null, DbFieldConstant.STATUS, status)
                 .orderByDesc(DbFieldConstant.CREATE_TIME);
-        Page<Order> p = orderMapper.selectPage(new Page<>(page, size), q);
-        return p.getRecords();
+        Page<Order> pageResult = orderMapper.selectPage(new Page<>(page, size), queryWrapper);
+        return pageResult.getRecords();
     }
 
     @Override
     public List<Order> shopOrders(Long shopId, Integer status, Integer page, Integer size) {
-        QueryWrapper<Order> q = new QueryWrapper<Order>()
+        QueryWrapper<Order> queryWrapper = new QueryWrapper<Order>()
                 .eq(DbFieldConstant.PAYEE_ID, shopId).eq(DbFieldConstant.PAYEE_TYPE, 1)
                 .eq(status != null, DbFieldConstant.STATUS, status)
                 .orderByDesc(DbFieldConstant.CREATE_TIME);
-        Page<Order> p = orderMapper.selectPage(new Page<>(page, size), q);
-        return p.getRecords();
+        Page<Order> pageResult = orderMapper.selectPage(new Page<>(page, size), queryWrapper);
+        return pageResult.getRecords();
     }
 
     private BigDecimal resolveAmount(CarPool pool, Integer type) {
@@ -221,7 +221,7 @@ public class OrderServiceImpl implements OrderService {
                         .eq(DbFieldConstant.ID, pool.getId())
                         .eq(DbFieldConstant.STATUS, PoolStatus.OPEN));
                 if (rows == 0 && pool.getStatus() == PoolStatus.OPEN) {
-                    throw new BaseException("拼车状态异常，无法设为满员");
+                    throw new BaseException(ErrorConstant.POOL_STATUS_ABNORMAL_CANNOT_SET_FULL);
                 }
             }
         } catch (InterruptedException e) {

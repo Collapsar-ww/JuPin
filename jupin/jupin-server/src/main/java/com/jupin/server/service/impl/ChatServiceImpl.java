@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.jupin.common.constant.MemberStatus;
 import com.jupin.common.constant.PoolStatus;
+import com.jupin.common.constant.ErrorConstant;
 import com.jupin.common.exception.BaseException;
 import com.jupin.pojo.entity.CarPool;
 import com.jupin.pojo.entity.ChatMessage;
@@ -36,18 +37,18 @@ public class ChatServiceImpl implements ChatService {
     @Transactional
     public void sendMessage(Long userId, Long poolId, String content, String senderRole) {
         if (content == null || content.trim().isEmpty()) {
-            throw new BaseException("消息内容不能为空");
+            throw new BaseException(ErrorConstant.MESSAGE_CONTENT_EMPTY);
         }
 
         CarPool pool = poolMapper.selectById(poolId);
-        if (pool == null) throw new BaseException("拼车不存在");
+        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         if (pool.getStatus() == PoolStatus.FINISHED || pool.getStatus() == PoolStatus.CANCELLED) {
-            throw new BaseException("拼车已结束，无法发送消息");
+            throw new BaseException(ErrorConstant.POOL_FINISHED_CANNOT_SEND);
         }
 
         Long count = memberMapper.selectCount(new QueryWrapper<PoolMember>()
                 .eq("pool_id", poolId).eq("user_id", userId).eq("status", MemberStatus.JOINED));
-        if (count == 0) throw new BaseException("你不在该拼车群聊中");
+        if (count == 0) throw new BaseException(ErrorConstant.NOT_IN_POOL_CHAT);
 
         User user = userMapper.selectById(userId);
         ChatMessage msg = ChatMessage.builder()
@@ -63,18 +64,18 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public List<ChatMessageVO> getHistory(Long userId, Long poolId, Integer page, Integer size) {
         CarPool pool = poolMapper.selectById(poolId);
-        if (pool == null) throw new BaseException("拼车不存在");
+        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
 
         Long count = memberMapper.selectCount(new QueryWrapper<PoolMember>()
                 .eq("pool_id", poolId).eq("user_id", userId).eq("status", MemberStatus.JOINED));
-        if (count == 0) throw new BaseException("你不是该拼车成员");
+        if (count == 0) throw new BaseException(ErrorConstant.NOT_POOL_MEMBER);
 
-        Page<ChatMessage> p = chatMessageMapper.selectPage(new Page<>(page, size),
+        Page<ChatMessage> pageResult = chatMessageMapper.selectPage(new Page<>(page, size),
                 new QueryWrapper<ChatMessage>()
                         .eq("pool_id", poolId)
                         .orderByDesc("create_time"));
-        return p.getRecords().stream()
-                .map(m -> BeanUtil.copyProperties(m, ChatMessageVO.class))
+        return pageResult.getRecords().stream()
+                .map(msg -> BeanUtil.copyProperties(msg, ChatMessageVO.class))
                 .collect(Collectors.toList());
     }
 }

@@ -36,15 +36,17 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public User register(RegisterRequest request) {
-        if (userMapper.selectCount(new QueryWrapper<User>().eq(DbFieldConstant.PHONE, request.getPhone())) > 0) {
-            throw new BaseException(ErrorConstant.PHONE_REGISTERED);
-        }
-
         int roleVal = switch (request.getRole()) {
             case "player" -> RoleConstant.PLAYER;
             case "shop" -> RoleConstant.SHOP;
             default -> throw new BaseException(ErrorConstant.INVALID_ROLE);
         };
+
+        if (userMapper.selectCount(new QueryWrapper<User>()
+                .eq(DbFieldConstant.PHONE, request.getPhone())
+                .eq(DbFieldConstant.ROLE, roleVal)) > 0) {
+            throw new BaseException(ErrorConstant.PHONE_ROLE_REGISTERED);
+        }
 
         User user = User.builder()
                 .phone(request.getPhone())
@@ -62,7 +64,17 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public User login(LoginRequest request) {
-        User user = userMapper.selectOne(new QueryWrapper<User>().eq(DbFieldConstant.PHONE, request.getPhone()));
+        QueryWrapper<User> queryWrapper = new QueryWrapper<User>().eq(DbFieldConstant.PHONE, request.getPhone());
+        if (request.getRole() != null) {
+            int roleVal = switch (request.getRole()) {
+                case "player" -> RoleConstant.PLAYER;
+                case "shop" -> RoleConstant.SHOP;
+                case "admin" -> RoleConstant.ADMIN;
+                default -> throw new BaseException(ErrorConstant.INVALID_ROLE);
+            };
+            queryWrapper.eq(DbFieldConstant.ROLE, roleVal);
+        }
+        User user = userMapper.selectOne(queryWrapper);
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new BaseException(ErrorConstant.ACCOUNT_OR_PASSWORD_ERROR);
         }

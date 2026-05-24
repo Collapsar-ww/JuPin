@@ -3,6 +3,7 @@ package com.jupin.server.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.jupin.common.constant.ErrorConstant;
 import com.jupin.common.exception.BaseException;
 import com.jupin.pojo.dto.ScriptCreateRequest;
 import com.jupin.pojo.entity.Script;
@@ -29,12 +30,12 @@ public class ScriptServiceImpl implements ScriptService {
 
     @Override
     public List<Script> list(String type, Integer page, Integer size) {
-        QueryWrapper<Script> q = new QueryWrapper<Script>()
+        QueryWrapper<Script> queryWrapper = new QueryWrapper<Script>()
                 .eq("status", 1)
                 .eq(StringUtils.hasText(type), "type", type)
                 .orderByDesc("create_time");
-        Page<Script> p = scriptMapper.selectPage(new Page<>(page, size), q);
-        return p.getRecords();
+        Page<Script> pageResult = scriptMapper.selectPage(new Page<>(page, size), queryWrapper);
+        return pageResult.getRecords();
     }
 
     @Override
@@ -61,7 +62,7 @@ public class ScriptServiceImpl implements ScriptService {
     @Transactional
     public Script update(Long scriptId, ScriptCreateRequest request) {
         Script existing = scriptMapper.selectById(scriptId);
-        if (existing == null) throw new BaseException("剧本不存在");
+        if (existing == null) throw new BaseException(ErrorConstant.SCRIPT_NOT_FOUND);
         BeanUtil.copyProperties(request, existing);
         scriptMapper.updateById(existing);
         return existing;
@@ -71,7 +72,7 @@ public class ScriptServiceImpl implements ScriptService {
     @Transactional
     public void delete(Long scriptId) {
         Script script = scriptMapper.selectById(scriptId);
-        if (script == null) throw new BaseException("剧本不存在");
+        if (script == null) throw new BaseException(ErrorConstant.SCRIPT_NOT_FOUND);
         script.setStatus(0);
         scriptMapper.updateById(script);
     }
@@ -90,7 +91,7 @@ public class ScriptServiceImpl implements ScriptService {
     public void addShopScript(Long shopId, Long scriptId, BigDecimal price) {
         Long count = shopScriptMapper.selectCount(new QueryWrapper<ShopScript>()
                 .eq("shop_id", shopId).eq("script_id", scriptId));
-        if (count > 0) throw new BaseException("该剧本已在店铺中");
+        if (count > 0) throw new BaseException(ErrorConstant.SCRIPT_ALREADY_IN_SHOP);
 
         ShopScript ss = ShopScript.builder()
                 .shopId(shopId)
