@@ -2,7 +2,12 @@
   <el-card class="pool-card" shadow="hover" @click="$router.push(`/player/pools/${pool.id}`)">
     <div class="pool-card-header">
       <span class="pool-name">{{ pool.scriptName }}</span>
-      <StatusTag :status="pool.status" />
+      <span style="display: flex; align-items: center; gap: 6px;">
+        <el-tag v-if="pool.recommendScore !== undefined && pool.recommendScore > 0" size="small" type="warning" effect="dark">
+          推荐 {{ pool.recommendScore }}
+        </el-tag>
+        <StatusTag :status="pool.status" />
+      </span>
     </div>
     <div class="pool-card-tags">
       <el-tag size="small" effect="plain">{{ pool.scriptType }}</el-tag>

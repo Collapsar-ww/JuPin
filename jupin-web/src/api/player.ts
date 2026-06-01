@@ -25,11 +25,14 @@ export interface PoolListItem {
   joinType: number
   status: number
   createTime: string
+  recommendScore?: number
 }
 
 export interface PoolDetail extends PoolListItem {
   members: PoolMemberItem[]
   roles: string | null
+  completedConfirmStarted: boolean
+  finishedConfirmStarted: boolean
 }
 
 export interface PoolMemberItem {
@@ -39,6 +42,12 @@ export interface PoolMemberItem {
   avatar: string | null
   role: number
   status: number
+  depositOrderStatus: number | null
+  remainingOrderStatus: number | null
+  completedConfirmed: number
+  completedConfirmTime: string | null
+  finishedConfirmed: number
+  finishedConfirmTime: string | null
 }
 
 export interface ShopListItem {

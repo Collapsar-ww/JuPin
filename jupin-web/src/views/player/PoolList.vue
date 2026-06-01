@@ -3,9 +3,14 @@
     <div class="page-header">
       <h3>拼车列表</h3>
       <div class="page-header-right">
-        <el-tag v-if="recommendEnabled" size="small" type="info" effect="plain" style="margin-right: 8px">
-          已按偏好排序
-        </el-tag>
+        <el-button-group size="small" style="margin-right: 8px">
+          <el-button :type="recommendEnabled ? 'primary' : 'default'" @click="toggleRecommend(true)">
+            推荐排序
+          </el-button>
+          <el-button :type="!recommendEnabled ? 'primary' : 'default'" @click="toggleRecommend(false)">
+            按时间
+          </el-button>
+        </el-button-group>
         <el-button type="primary" @click="$router.push('/player/pools/create')">
           发布拼车
         </el-button>
@@ -43,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import { getPlayerPoolList } from '../../api/player'
 import type { PoolListItem } from '../../api/player'
@@ -85,6 +90,12 @@ async function loadPools(p?: number) {
     loading.value = false
   }
 }
+
+function toggleRecommend(enabled: boolean) {
+  recommendEnabled.value = enabled
+}
+
+watch(recommendEnabled, () => loadPools(1))
 
 onMounted(() => loadPools())
 </script>

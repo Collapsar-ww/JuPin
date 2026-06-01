@@ -38,6 +38,15 @@ export interface CreateShopPoolRequest {
   dmId: number
 }
 
+// === Shop User Profile ===
+export function getShopUserProfile(): Promise<ApiResult<import('./auth').UserInfo>> {
+  return get('/shop/user/me')
+}
+
+export function updateShopUserProfile(data: { nickname?: string; gender?: number }): Promise<ApiResult<void>> {
+  return put('/shop/user/me', data)
+}
+
 // === Shop Current ===
 export function getCurrentShop(): Promise<ApiResult<ShopInfo>> {
   return get('/shop/current')

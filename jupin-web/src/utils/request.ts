@@ -6,6 +6,7 @@ import router from '../router'
 export interface ApiResult<T = any> {
   code: number
   msg: string
+  message?: string
   data: T
 }
 
@@ -37,11 +38,12 @@ request.interceptors.response.use(
       localStorage.removeItem('refreshToken')
       localStorage.removeItem('userInfo')
       router.push('/login')
-      return Promise.reject(new Error(res.msg || '登录已过期'))
+      return Promise.reject(new Error(res.msg || res.message || '登录已过期'))
     }
     if (res.code !== 200 && res.code !== undefined) {
-      ElMessage.error(res.msg || '请求失败')
-      return Promise.reject(new Error(res.msg))
+      const message = res.msg || res.message || '请求失败'
+      ElMessage.error(message)
+      return Promise.reject(new Error(message))
     }
     return response
   },
@@ -52,7 +54,7 @@ request.interceptors.response.use(
       localStorage.removeItem('userInfo')
       router.push('/login')
     }
-    ElMessage.error(error.response?.data?.msg || error.message || '网络错误')
+    ElMessage.error(error.response?.data?.msg || error.response?.data?.message || error.message || '网络错误')
     return Promise.reject(error)
   },
 )

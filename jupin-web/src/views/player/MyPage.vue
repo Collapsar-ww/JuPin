@@ -7,8 +7,31 @@
           <div class="user-name">{{ user?.nickname }}</div>
           <div class="user-meta">{{ user?.phone }} · 信用分：{{ user?.creditScore }}</div>
         </div>
+        <el-button size="small" text type="primary" @click="showProfileEdit = true">
+          编辑资料
+        </el-button>
       </div>
     </el-card>
+
+    <!-- Profile Edit Dialog -->
+    <el-dialog v-model="showProfileEdit" title="编辑个人资料" width="400px">
+      <el-form ref="profileFormRef" :model="profileForm" :rules="profileRules" label-width="80px">
+        <el-form-item label="昵称" prop="nickname">
+          <el-input v-model="profileForm.nickname" placeholder="2-20位" maxlength="20" />
+        </el-form-item>
+        <el-form-item label="性别" prop="gender">
+          <el-radio-group v-model="profileForm.gender">
+            <el-radio :value="0">未知</el-radio>
+            <el-radio :value="1">男</el-radio>
+            <el-radio :value="2">女</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showProfileEdit = false">取消</el-button>
+        <el-button type="primary" :loading="profileSaving" @click="handleSaveProfile">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-tabs v-model="activeTab" class="my-tabs" style="margin-top: 16px">
       <el-tab-pane label="我的偏好" name="preference">
@@ -57,11 +80,11 @@
             <el-card v-for="pool in joinedPools" :key="'join-' + pool.poolId" class="joined-pool-card" shadow="hover" @click="router.push('/player/pools/' + pool.poolId)">
               <div class="joined-pool-info">
                 <span class="pool-name">{{ pool.scriptName }}</span>
-                <el-tag v-if="pool.memberStatus === 3" size="small" type="danger">已退出</el-tag>
-                <el-tag v-else-if="pool.memberStatus === 2" size="small" type="success">已加入</el-tag>
-                <el-tag v-else-if="pool.memberStatus === 1" size="small" type="warning">待支付</el-tag>
-                <el-tag v-else-if="pool.memberStatus === 0" size="small">待审核</el-tag>
-                <StatusTag v-if="pool.memberStatus === 2 || pool.memberStatus === 3" :status="pool.poolStatus" />
+                <el-tag v-if="pool.memberStatus === MEMBER_STATUS.LEFT" size="small" type="danger">已退出</el-tag>
+                <el-tag v-else-if="pool.memberStatus === MEMBER_STATUS.JOINED" size="small" type="success">已加入</el-tag>
+                <el-tag v-else-if="pool.memberStatus === MEMBER_STATUS.PENDING_PAYMENT" size="small" type="warning">待支付</el-tag>
+                <el-tag v-else-if="pool.memberStatus === MEMBER_STATUS.PENDING_REVIEW" size="small">待审核</el-tag>
+                <StatusTag v-if="pool.memberStatus === MEMBER_STATUS.JOINED || pool.memberStatus === MEMBER_STATUS.LEFT" :status="pool.poolStatus" />
               </div>
             </el-card>
           </template>
@@ -143,10 +166,12 @@
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import type { FormInstance } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
-import { getPlayerPoolList, getMyOrders, payOrder, getPreference, savePreference, getMyMemberships, getMyDmReviews } from '../../api/player'
+import { updateUserProfile } from '../../api/player'
+import { getPlayerPoolList, getMyOrders, createOrder, payOrder, getPreference, savePreference, getMyMemberships, getMyDmReviews } from '../../api/player'
 import type { PoolListItem, OrderItem, Preference, MemberPoolInfo } from '../../api/player'
-import { SCRIPT_TYPES, ORDER_STATUS_TEXT, ORDER_STATUS } from '../../constants'
+import { SCRIPT_TYPES, ORDER_STATUS_TEXT, ORDER_STATUS, MEMBER_STATUS, POOL_STATUS } from '../../constants'
 import PoolCard from '../../components/PoolCard.vue'
 import StatusTag from '../../components/StatusTag.vue'
 import { formatPrice, formatDateTime } from '../../utils/format'
@@ -156,6 +181,15 @@ const router = useRouter()
 
 const user = computed(() => auth.user)
 const activeTab = ref('preference')
+
+// Profile editing (#17)
+const showProfileEdit = ref(false)
+const profileSaving = ref(false)
+const profileFormRef = ref<FormInstance>()
+const profileForm = reactive({ nickname: '', gender: 0 })
+const profileRules = {
+  nickname: [{ required: true, message: '请输入昵称', trigger: 'blur' }, { min: 2, max: 20, message: '昵称长度 2-20 位', trigger: 'blur' }],
+}
 
 const prefLoading = ref(false)
 const pref = reactive<Preference>({
@@ -225,6 +259,8 @@ async function loadMyPools() {
   try {
     const res = await getPlayerPoolList({ page: 1, size: 50 })
     allPools.value = res.data
+  } catch {
+    // handled
   } finally {
     poolLoading.value = false
   }
@@ -236,6 +272,8 @@ async function loadOrders(p?: number) {
   try {
     const res = await getMyOrders({ page: orderPage.value, size: orderSize.value })
     orders.value = res.data
+  } catch {
+    // handled
   } finally {
     orderLoading.value = false
   }
@@ -268,7 +306,7 @@ function buildTodos() {
   }
 
   for (const m of memberships.value) {
-    if (m.memberStatus === 1) {
+    if (m.memberStatus === MEMBER_STATUS.PENDING_PAYMENT) {
       const hasPendingOrder = orders.value.some(o => o.poolId === m.poolId && o.type === 0 && o.status === ORDER_STATUS.PENDING)
       if (!hasPendingOrder) {
         list.push({
@@ -277,13 +315,13 @@ function buildTodos() {
           title: '待支付押金',
           desc: `《${m.scriptName}》押金 ¥${formatPrice(m.deposit)}`,
           actionText: '去支付',
-          action: () => router.push(`/player/pools/${m.poolId}`),
+          action: () => handleTodoPay(m),
         })
       }
     }
 
-    if (m.memberStatus === 2) {
-      if (m.poolStatus === 1 && m.completedConfirmed === 0) {
+    if (m.memberStatus === MEMBER_STATUS.JOINED) {
+      if (m.poolStatus === POOL_STATUS.FULL && m.completedConfirmed === 0) {
         list.push({
           key: `confirm-${m.poolId}`,
           type: 'confirm',
@@ -293,7 +331,7 @@ function buildTodos() {
           action: () => router.push(`/player/pools/${m.poolId}`),
         })
       }
-      if (m.poolStatus === 2 && m.finishedConfirmed === 0) {
+      if (m.poolStatus === POOL_STATUS.COMPLETED && m.finishedConfirmed === 0) {
         list.push({
           key: `finish-${m.poolId}`,
           type: 'confirm',
@@ -303,7 +341,7 @@ function buildTodos() {
           action: () => router.push(`/player/pools/${m.poolId}`),
         })
       }
-      if (m.poolStatus === 3) {
+      if (m.poolStatus === POOL_STATUS.FINISHED) {
         list.push({
           key: `review-${m.poolId}`,
           type: 'review',
@@ -322,12 +360,18 @@ async function loadMemberships() {
   todoLoading.value = true
   try {
     const res = await getMyMemberships()
+    if (!Array.isArray(res.data)) {
+      throw new Error('我的拼车接口返回格式异常')
+    }
     memberships.value = res.data
   } catch {
-    // handled
+    memberships.value = []
+    ElMessage.error('我的拼车加载失败，请稍后重试')
   } finally {
     todoLoading.value = false
   }
+  // Always rebuild todos after memberships load, regardless of other API results
+  buildTodos()
 }
 
 async function loadDmReviews() {
@@ -342,9 +386,51 @@ async function loadDmReviews() {
   }
 }
 
+// Profile editing: populate form when dialog opens
+watch(showProfileEdit, (v) => {
+  if (v && user.value) {
+    profileForm.nickname = user.value.nickname
+    profileForm.gender = user.value.gender
+  }
+})
+
+async function handleSaveProfile() {
+  const valid = await profileFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  profileSaving.value = true
+  try {
+    await updateUserProfile({ nickname: profileForm.nickname, gender: profileForm.gender })
+    ElMessage.success('保存成功')
+    showProfileEdit.value = false
+    if (auth.user) {
+      auth.user.nickname = profileForm.nickname
+      auth.user.gender = profileForm.gender
+    }
+  } catch {
+    // handled
+  } finally {
+    profileSaving.value = false
+  }
+}
+
+// Enhance #5: try to create order and pay directly from todo action
+async function handleTodoPay(m: MemberPoolInfo) {
+  todoLoading.value = true
+  try {
+    const order = await createOrder({ poolId: m.poolId, type: 0 })
+    await payOrder(order.data.orderNo)
+    ElMessage.success('押金支付成功')
+    await Promise.all([loadOrders(), loadMemberships()])
+  } catch {
+    // fallback: navigate to pool detail
+    router.push(`/player/pools/${m.poolId}`)
+  } finally {
+    todoLoading.value = false
+  }
+}
+
 onMounted(async () => {
-  await Promise.all([loadPreference(), loadMyPools(), loadOrders(), loadMemberships(), loadDmReviews()])
-  buildTodos()
+  await Promise.allSettled([loadPreference(), loadMyPools(), loadOrders(), loadMemberships(), loadDmReviews()])
 })
 </script>
 

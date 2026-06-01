@@ -28,6 +28,16 @@
         <el-descriptions-item label="人均费用">¥{{ formatPrice(pool.price) }}</el-descriptions-item>
         <el-descriptions-item label="押金">¥{{ formatPrice(pool.deposit) }}</el-descriptions-item>
         <el-descriptions-item label="DM">{{ pool.dmNickname || '待指定' }}</el-descriptions-item>
+        <el-descriptions-item label="成团确认">
+          <el-tag size="small" :type="completeConfirmStarted ? 'warning' : 'info'">
+            {{ completeConfirmStarted ? '进行中' : '未开始' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="结束确认">
+          <el-tag size="small" :type="finishConfirmStarted ? 'warning' : 'info'">
+            {{ finishConfirmStarted ? '进行中' : '未开始' }}
+          </el-tag>
+        </el-descriptions-item>
       </el-descriptions>
 
       <h4 style="margin: 20px 0 8px">成员列表</h4>
@@ -47,32 +57,97 @@
             <el-tag v-else size="small" type="info">其他</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="押金" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="orderTagType(row.depositOrderStatus, row.status === MEMBER_STATUS.PENDING_PAYMENT || row.status === MEMBER_STATUS.JOINED)">
+              {{ orderText(row.depositOrderStatus, row.status === MEMBER_STATUS.PENDING_PAYMENT || row.status === MEMBER_STATUS.JOINED) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="成团确认" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="confirmTagType(row.completedConfirmed, completeConfirmStarted)">
+              {{ confirmText(row.completedConfirmed, completeConfirmStarted) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="尾款" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="orderTagType(row.remainingOrderStatus, pool.status >= POOL_STATUS.COMPLETED)">
+              {{ orderText(row.remainingOrderStatus, pool.status >= POOL_STATUS.COMPLETED) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="结束确认" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="confirmTagType(row.finishedConfirmed, finishConfirmStarted)">
+              {{ confirmText(row.finishedConfirmed, finishConfirmStarted) }}
+            </el-tag>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getShopPoolDetail, startCompleteShop, startFinishShop, cancelShopPool } from '../../api/shop'
 import type { PoolDetail } from '../../api/player'
 import { useAuthStore } from '../../stores/auth'
-import { POOL_STATUS } from '../../constants'
+import { MEMBER_STATUS, ORDER_STATUS, POOL_STATUS } from '../../constants'
 import StatusTag from '../../components/StatusTag.vue'
 import { formatDateTime, formatPrice } from '../../utils/format'
+import { subscribePool } from '../../utils/poolSocket'
 
 const route = useRoute()
 const auth = useAuthStore()
 
 const loading = ref(false)
 const pool = ref<PoolDetail | null>(null)
+let refreshTimer: number | undefined
+let unsubscribePool: (() => void) | undefined
 
 const isOwner = computed(() => pool.value?.ownerId === auth.user?.id)
-const canConfirmComplete = computed(() => isOwner.value && pool.value?.status === POOL_STATUS.FULL)
-const canStartFinish = computed(() => isOwner.value && pool.value?.status === POOL_STATUS.COMPLETED)
+const joinedMembers = computed(() => pool.value?.members.filter(m => m.status === MEMBER_STATUS.JOINED) ?? [])
+const completeRejected = computed(() => joinedMembers.value.some(m => m.completedConfirmed === 2))
+const finishRejected = computed(() => joinedMembers.value.some(m => m.finishedConfirmed === 2))
+const completeConfirmStarted = computed(() => !!pool.value?.completedConfirmStarted || (joinedMembers.value.some(m => !!m.completedConfirmTime) && !completeRejected.value))
+const finishConfirmStarted = computed(() => !!pool.value?.finishedConfirmStarted || (joinedMembers.value.some(m => !!m.finishedConfirmTime) && !finishRejected.value))
+const isFullByCount = computed(() => !!pool.value && pool.value.currentMembers >= pool.value.maxMembers)
+const canConfirmComplete = computed(() => isOwner.value && pool.value?.status === POOL_STATUS.FULL && isFullByCount.value && !completeConfirmStarted.value)
+const canStartFinish = computed(() => isOwner.value && pool.value?.status === POOL_STATUS.COMPLETED && !finishConfirmStarted.value)
 const canCancel = computed(() => isOwner.value && (pool.value?.status === POOL_STATUS.OPEN || pool.value?.status === POOL_STATUS.FULL))
+
+function orderText(status: number | null | undefined, expected: boolean) {
+  if (status === ORDER_STATUS.PAID) return '已支付'
+  if (status === ORDER_STATUS.PENDING) return '待支付'
+  if (status === ORDER_STATUS.REFUNDED) return '已退款'
+  if (status === ORDER_STATUS.OVERDUE) return '逾期'
+  return expected ? '未创建' : '未到阶段'
+}
+
+function orderTagType(status: number | null | undefined, expected: boolean) {
+  if (status === ORDER_STATUS.PAID) return 'success'
+  if (status === ORDER_STATUS.PENDING) return 'warning'
+  if (status === ORDER_STATUS.REFUNDED) return 'info'
+  if (status === ORDER_STATUS.OVERDUE) return 'danger'
+  return expected ? 'warning' : 'info'
+}
+
+function confirmText(status: number | null | undefined, started: boolean) {
+  if (status === 1) return '已确认'
+  if (status === 2) return '已拒绝'
+  return started ? '待确认' : '未开始'
+}
+
+function confirmTagType(status: number | null | undefined, started: boolean) {
+  if (status === 1) return 'success'
+  if (status === 2) return 'danger'
+  return started ? 'warning' : 'info'
+}
 
 async function loadDetail() {
   loading.value = true
@@ -87,16 +162,28 @@ async function loadDetail() {
 async function handleComplete() {
   try {
     await startCompleteShop(pool.value!.id)
+    if (pool.value) {
+      pool.value.completedConfirmStarted = true
+      pool.value.members = pool.value.members.map((member) => member.status === MEMBER_STATUS.JOINED
+        ? { ...member, completedConfirmTime: member.completedConfirmTime || new Date().toISOString(), completedConfirmed: 0 }
+        : member)
+    }
     ElMessage.success('已发起完成确认')
-    loadDetail()
+    await loadDetail()
   } catch { /* handled */ }
 }
 
 async function handleFinish() {
   try {
     await startFinishShop(pool.value!.id)
+    if (pool.value) {
+      pool.value.finishedConfirmStarted = true
+      pool.value.members = pool.value.members.map((member) => member.status === MEMBER_STATUS.JOINED
+        ? { ...member, finishedConfirmTime: member.finishedConfirmTime || new Date().toISOString(), finishedConfirmed: 0 }
+        : member)
+    }
     ElMessage.success('已发起结束确认')
-    loadDetail()
+    await loadDetail()
   } catch { /* handled */ }
 }
 
@@ -109,7 +196,22 @@ async function handleCancel() {
   } catch { /* cancelled */ }
 }
 
-onMounted(loadDetail)
+onMounted(() => {
+  loadDetail()
+  unsubscribePool = subscribePool(Number(route.params.id), () => {
+    loadDetail()
+  })
+  refreshTimer = window.setInterval(() => {
+    if (pool.value?.status === POOL_STATUS.FULL || pool.value?.status === POOL_STATUS.COMPLETED) {
+      loadDetail()
+    }
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
+  if (unsubscribePool) unsubscribePool()
+})
 </script>
 
 <style scoped>

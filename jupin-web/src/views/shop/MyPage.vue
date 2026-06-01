@@ -9,8 +9,31 @@
           <div class="user-name">{{ user?.nickname }}</div>
           <div class="user-meta">{{ maskedPhone }}</div>
         </div>
+        <el-button size="small" text type="primary" @click="openProfileEdit">
+          编辑资料
+        </el-button>
       </div>
     </el-card>
+
+    <!-- Profile Edit Dialog -->
+    <el-dialog v-model="showProfileEdit" title="编辑个人资料" width="400px">
+      <el-form ref="profileFormRef" :model="profileForm" :rules="profileRules" label-width="80px">
+        <el-form-item label="昵称" prop="nickname">
+          <el-input v-model="profileForm.nickname" placeholder="2-20位" maxlength="20" />
+        </el-form-item>
+        <el-form-item label="性别" prop="gender">
+          <el-radio-group v-model="profileForm.gender">
+            <el-radio :value="0">未知</el-radio>
+            <el-radio :value="1">男</el-radio>
+            <el-radio :value="2">女</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showProfileEdit = false">取消</el-button>
+        <el-button type="primary" :loading="profileSaving" @click="handleSaveProfile">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-card shadow="never" style="margin-top: 16px">
       <template #header><span>账号信息</span></template>
@@ -36,8 +59,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import type { FormInstance } from 'element-plus'
 import { useAuthStore } from '../../stores/auth'
-import { getCurrentShop } from '../../api/shop'
+import { getCurrentShop, updateShopUserProfile } from '../../api/shop'
 import type { ShopInfo } from '../../api/shop'
 import { formatDateTime } from '../../utils/format'
 
@@ -47,6 +72,15 @@ const loading = ref(false)
 const shop = ref<ShopInfo | null>(null)
 
 const user = computed(() => auth.user)
+
+// Profile editing
+const showProfileEdit = ref(false)
+const profileSaving = ref(false)
+const profileFormRef = ref<FormInstance>()
+const profileForm = ref({ nickname: '', gender: 0 })
+const profileRules = {
+  nickname: [{ required: true, message: '请输入昵称', trigger: 'blur' }, { min: 2, max: 20, message: '昵称长度 2-20 位', trigger: 'blur' }],
+}
 
 const maskedPhone = computed(() => {
   const p = user.value?.phone
@@ -68,6 +102,36 @@ const roleText = computed(() => {
   if (r === 3) return '普通成员'
   return '未知'
 })
+
+function openProfileEdit() {
+  profileForm.value = {
+    nickname: user.value?.nickname || '',
+    gender: user.value?.gender ?? 0,
+  }
+  showProfileEdit.value = true
+}
+
+async function handleSaveProfile() {
+  const valid = await profileFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  profileSaving.value = true
+  try {
+    await updateShopUserProfile({
+      nickname: profileForm.value.nickname,
+      gender: profileForm.value.gender,
+    })
+    ElMessage.success('保存成功')
+    showProfileEdit.value = false
+    if (auth.user) {
+      auth.user.nickname = profileForm.value.nickname
+      auth.user.gender = profileForm.value.gender
+    }
+  } catch {
+    // handled
+  } finally {
+    profileSaving.value = false
+  }
+}
 
 async function loadShop() {
   loading.value = true
