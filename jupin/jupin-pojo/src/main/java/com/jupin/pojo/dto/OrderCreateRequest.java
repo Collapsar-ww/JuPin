@@ -16,6 +16,9 @@ public class OrderCreateRequest {
     @Schema(description = "订单类型：0-押金 1-车费", example = "0")
     private Integer type;
 
+    @Schema(description = "创建订单幂等 Key，同一用户同一 Key 重复提交返回同一订单", example = "pool-1-deposit-1716260000")
+    private String idempotentKey;
+
     @Schema(description = "收款方ID（创建时自动填入，玩家局=DM, 店家局=店铺）")
     private Long payeeId;
 

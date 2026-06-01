@@ -15,6 +15,13 @@ public class RabbitConfig {
     public static final String QUEUE_NOTIFICATION = "notification.queue";
     public static final String ROUTING_NOTIFICATION = "notification.routing";
 
+    public static final String EXCHANGE_TIMEOUT_DELAY = "timeout.delay.exchange";
+    public static final String QUEUE_TIMEOUT_DELAY = "timeout.delay.queue";
+    public static final String ROUTING_TIMEOUT_DELAY = "timeout.delay.routing";
+    public static final String EXCHANGE_TIMEOUT_DLX = "timeout.dlx.exchange";
+    public static final String QUEUE_TIMEOUT = "timeout.queue";
+    public static final String ROUTING_TIMEOUT = "timeout.routing";
+
     @Bean
     public DirectExchange matchExchange() {
         return new DirectExchange(EXCHANGE_MATCH);
@@ -43,5 +50,38 @@ public class RabbitConfig {
     @Bean
     public Binding notificationBinding() {
         return BindingBuilder.bind(notificationQueue()).to(notificationExchange()).with(ROUTING_NOTIFICATION);
+    }
+
+    @Bean
+    public DirectExchange timeoutDelayExchange() {
+        return new DirectExchange(EXCHANGE_TIMEOUT_DELAY);
+    }
+
+    @Bean
+    public DirectExchange timeoutDlxExchange() {
+        return new DirectExchange(EXCHANGE_TIMEOUT_DLX);
+    }
+
+    @Bean
+    public Queue timeoutDelayQueue() {
+        return QueueBuilder.durable(QUEUE_TIMEOUT_DELAY)
+                .deadLetterExchange(EXCHANGE_TIMEOUT_DLX)
+                .deadLetterRoutingKey(ROUTING_TIMEOUT)
+                .build();
+    }
+
+    @Bean
+    public Queue timeoutQueue() {
+        return QueueBuilder.durable(QUEUE_TIMEOUT).build();
+    }
+
+    @Bean
+    public Binding timeoutDelayBinding() {
+        return BindingBuilder.bind(timeoutDelayQueue()).to(timeoutDelayExchange()).with(ROUTING_TIMEOUT_DELAY);
+    }
+
+    @Bean
+    public Binding timeoutBinding() {
+        return BindingBuilder.bind(timeoutQueue()).to(timeoutDlxExchange()).with(ROUTING_TIMEOUT);
     }
 }

@@ -19,6 +19,7 @@ public class Order {
     private Long id;
 
     private String orderNo;
+    private String idempotentKey;
     private Long userId;
     private Long poolId;
     private Integer type;           // 0-押金 1-车费
@@ -30,6 +31,9 @@ public class Order {
     private LocalDateTime releaseTime;
     private String refundReason;
     private String channelTxnId;
+    private String payRequestNo;
+    private String callbackRequestNo;
+    private LocalDateTime expireTime;
     private LocalDateTime payTime;
     private LocalDateTime refundTime;
 

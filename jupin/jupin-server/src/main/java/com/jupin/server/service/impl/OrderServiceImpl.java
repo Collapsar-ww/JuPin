@@ -18,12 +18,17 @@ import com.jupin.pojo.entity.PoolMember;
 import com.jupin.server.mapper.OrderMapper;
 import com.jupin.server.mapper.PoolMemberMapper;
 import com.jupin.server.mapper.PoolMapper;
+import com.jupin.server.mq.TimeoutMessage;
+import com.jupin.server.mq.TimeoutProducer;
 import com.jupin.server.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -38,16 +43,32 @@ public class OrderServiceImpl implements OrderService {
     private final PoolMapper poolMapper;
     private final PoolMemberMapper memberMapper;
     private final RedissonClient redisson;
+    private final StringRedisTemplate stringRedis;
+    private final TimeoutProducer timeoutProducer;
     private final Snowflake snowflake = IdUtil.getSnowflake(1, 1);
+    private static final long DEPOSIT_PAY_TIMEOUT_MINUTES = 15;
+    private static final long FINAL_PAY_TIMEOUT_HOURS = 24;
 
     @Override
     @Transactional
-    public Order create(Long userId, Long poolId, Integer type) {
+    public Order create(Long userId, Long poolId, Integer type, String idempotentKey) {
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         if (type == null || (type != 0 && type != 1)) {
             throw new BaseException(ErrorConstant.INVALID_ORDER_TYPE);
         }
+        String normalizedIdempotentKey = resolveIdempotentKey(userId, poolId, type, idempotentKey);
+        Order idempotentOrder = orderMapper.selectOne(new QueryWrapper<Order>()
+                .eq("idempotent_key", normalizedIdempotentKey)
+                .eq(DbFieldConstant.USER_ID, userId)
+                .last("LIMIT 1"));
+        if (idempotentOrder != null) {
+            return idempotentOrder;
+        }
+        Long conflictCount = orderMapper.selectCount(new QueryWrapper<Order>()
+                .eq("idempotent_key", normalizedIdempotentKey)
+                .ne(DbFieldConstant.USER_ID, userId));
+        if (conflictCount > 0) throw new BaseException(ErrorConstant.IDEMPOTENT_KEY_CONFLICT);
 
         PoolMember member = memberMapper.selectOne(new QueryWrapper<PoolMember>()
                 .eq(DbFieldConstant.POOL_ID, poolId)
@@ -78,6 +99,7 @@ public class OrderServiceImpl implements OrderService {
 
         Order order = Order.builder()
                 .orderNo(snowflake.nextIdStr())
+                .idempotentKey(normalizedIdempotentKey)
                 .userId(userId)
                 .poolId(poolId)
                 .type(type)
@@ -85,8 +107,21 @@ public class OrderServiceImpl implements OrderService {
                 .status(OrderStatus.PENDING)
                 .payeeId(pool.getType() == 1 ? pool.getShopId() : pool.getDmId())
                 .payeeType(pool.getType() == 1 ? 1 : 0)
+                .releaseStatus(0)
+                .expireTime(resolveExpireTime(type))
                 .build();
-        orderMapper.insert(order);
+        try {
+            orderMapper.insert(order);
+        } catch (DuplicateKeyException e) {
+            Order existing = orderMapper.selectOne(new QueryWrapper<Order>()
+                    .eq("idempotent_key", normalizedIdempotentKey)
+                    .eq(DbFieldConstant.USER_ID, userId)
+                    .last("LIMIT 1"));
+            if (existing != null) return existing;
+            throw e;
+        }
+        timeoutProducer.send(new TimeoutMessage(TimeoutMessage.ORDER_PAYMENT, order.getId(), poolId, userId),
+                type == 0 ? TimeUnit.MINUTES.toMillis(DEPOSIT_PAY_TIMEOUT_MINUTES) : TimeUnit.HOURS.toMillis(FINAL_PAY_TIMEOUT_HOURS));
         return order;
     }
 
@@ -167,9 +202,17 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private void markPaid(Order order) {
-        order.setStatus(OrderStatus.PAID);
-        order.setPayTime(LocalDateTime.now());
-        orderMapper.updateById(order);
+        int rows = orderMapper.update(null, new UpdateWrapper<Order>()
+                .set(DbFieldConstant.STATUS, OrderStatus.PAID)
+                .set("pay_time", LocalDateTime.now())
+                .set("pay_request_no", "MOCK-" + snowflake.nextIdStr())
+                .eq(DbFieldConstant.ID, order.getId())
+                .eq(DbFieldConstant.STATUS, OrderStatus.PENDING));
+        if (rows == 0) {
+            Order latest = orderMapper.selectById(order.getId());
+            if (latest != null && latest.getStatus() == OrderStatus.PAID) return;
+            throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
+        }
     }
 
     private void payDeposit(Order order) {
@@ -213,9 +256,13 @@ public class OrderServiceImpl implements OrderService {
                     .eq(DbFieldConstant.STATUS, MemberStatus.PENDING_PAYMENT));
             if (updated == 0) throw new BaseException(ErrorConstant.MEMBER_STATUS_CHANGED);
 
-            pool.setCurrentMembers(pool.getCurrentMembers() + 1);
+            Long joinedCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
+                    .eq(DbFieldConstant.POOL_ID, pool.getId())
+                    .eq(DbFieldConstant.STATUS, MemberStatus.JOINED));
+            pool.setCurrentMembers(joinedCount.intValue());
             poolMapper.updateById(pool);
-            if (pool.getCurrentMembers().equals(pool.getMaxMembers())) {
+            stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + pool.getId());
+            if (joinedCount.equals(pool.getMaxMembers().longValue())) {
                 int rows = poolMapper.update(null, new UpdateWrapper<CarPool>()
                         .set(DbFieldConstant.STATUS, PoolStatus.FULL)
                         .eq(DbFieldConstant.ID, pool.getId())
@@ -223,6 +270,11 @@ public class OrderServiceImpl implements OrderService {
                 if (rows == 0 && pool.getStatus() == PoolStatus.OPEN) {
                     throw new BaseException(ErrorConstant.POOL_STATUS_ABNORMAL_CANNOT_SET_FULL);
                 }
+            } else if (pool.getStatus() == PoolStatus.FULL) {
+                poolMapper.update(null, new UpdateWrapper<CarPool>()
+                        .set(DbFieldConstant.STATUS, PoolStatus.OPEN)
+                        .eq(DbFieldConstant.ID, pool.getId())
+                        .eq(DbFieldConstant.STATUS, PoolStatus.FULL));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -230,5 +282,18 @@ public class OrderServiceImpl implements OrderService {
         } finally {
             if (lock.isHeldByCurrentThread()) lock.unlock();
         }
+    }
+
+    private String resolveIdempotentKey(Long userId, Long poolId, Integer type, String idempotentKey) {
+        if (StringUtils.hasText(idempotentKey)) {
+            return idempotentKey.trim();
+        }
+        return userId + ":" + poolId + ":" + type;
+    }
+
+    private LocalDateTime resolveExpireTime(Integer type) {
+        return type != null && type == 1
+                ? LocalDateTime.now().plusHours(FINAL_PAY_TIMEOUT_HOURS)
+                : LocalDateTime.now().plusMinutes(DEPOSIT_PAY_TIMEOUT_MINUTES);
     }
 }

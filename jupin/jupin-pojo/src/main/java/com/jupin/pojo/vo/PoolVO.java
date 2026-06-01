@@ -79,9 +79,18 @@ public class PoolVO {
     @Schema(description = "成员列表")
     private List<MemberVO> members;
 
+    @Schema(description = "成团确认流程是否已发起")
+    private Boolean completedConfirmStarted;
+
+    @Schema(description = "结束确认流程是否已发起")
+    private Boolean finishedConfirmStarted;
+
     @Schema(description = "角色状态列表")
     private List<RoleStatusVO> roles;
 
     @Schema(description = "创建时间")
     private LocalDateTime createTime;
+
+    @Schema(description = "推荐匹配度分数（recommend=true 时返回）")
+    private Integer recommendScore;
 }

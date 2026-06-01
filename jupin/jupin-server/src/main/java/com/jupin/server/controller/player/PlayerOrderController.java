@@ -27,7 +27,7 @@ public class PlayerOrderController {
     @Operation(summary = "创建订单  🔒")
     @PostMapping("/create")
     public Result<OrderVO> create(@Valid @RequestBody OrderCreateRequest request) {
-        Order order = orderService.create(BaseContext.getCurrentId(), request.getPoolId(), request.getType());
+        Order order = orderService.create(BaseContext.getCurrentId(), request.getPoolId(), request.getType(), request.getIdempotentKey());
         return Result.success(BeanUtil.copyProperties(order, OrderVO.class));
     }
 
@@ -50,5 +50,4 @@ public class PlayerOrderController {
         return Result.success(vos);
     }
 }
-
 

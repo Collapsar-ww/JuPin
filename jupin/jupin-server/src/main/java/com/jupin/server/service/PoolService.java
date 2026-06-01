@@ -13,7 +13,7 @@ import java.util.List;
 public interface PoolService {
     CarPool create(Long userId, PoolCreateRequest request);
     CarPool getDetail(Long poolId);
-    List<CarPool> list(String city, String scriptType, Integer type, Integer status,
+    List<CarPool> list(Long userId, String city, String scriptType, Integer type, Integer status,
                         BigDecimal priceMin, BigDecimal priceMax,
                         String startTimeAfter, String startTimeBefore,
                         Boolean recommend, Integer page, Integer size);

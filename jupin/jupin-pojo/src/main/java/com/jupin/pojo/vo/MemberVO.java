@@ -35,11 +35,23 @@ public class MemberVO {
     @Schema(description = "状态：0-待审核 1-待支付 2-已加入 3-已退出 4-已拒绝")
     private Integer status;
 
+    @Schema(description = "押金订单状态：0-待支付 1-已支付 2-已退款 3-已扣留 4-逾期；无订单时为空")
+    private Integer depositOrderStatus;
+
+    @Schema(description = "尾款订单状态：0-待支付 1-已支付 2-已退款 3-已扣留 4-逾期；无订单时为空")
+    private Integer remainingOrderStatus;
+
     @Schema(description = "COMPLETED确认状态：0-未确认 1-已确认 2-已拒绝")
     private Integer completedConfirmed;
 
+    @Schema(description = "COMPLETED确认时间；非空表示本轮成团确认已发起或已确认")
+    private LocalDateTime completedConfirmTime;
+
     @Schema(description = "FINISHED确认状态：0-未确认 1-已确认 2-已拒绝")
     private Integer finishedConfirmed;
+
+    @Schema(description = "FINISHED确认时间；非空表示本轮结束确认已发起或已确认")
+    private LocalDateTime finishedConfirmTime;
 
     @Schema(description = "加入时间")
     private LocalDateTime joinTime;

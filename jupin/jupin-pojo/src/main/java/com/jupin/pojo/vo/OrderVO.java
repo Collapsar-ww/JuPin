@@ -15,6 +15,9 @@ public class OrderVO {
     @Schema(description = "订单号（雪花算法生成）")
     private String orderNo;
 
+    @Schema(description = "创建订单幂等 Key")
+    private String idempotentKey;
+
     @Schema(description = "用户 ID")
     private Long userId;
 
@@ -44,6 +47,9 @@ public class OrderVO {
 
     @Schema(description = "支付时间")
     private LocalDateTime payTime;
+
+    @Schema(description = "订单过期时间")
+    private LocalDateTime expireTime;
 
     @Schema(description = "退款时间")
     private LocalDateTime refundTime;

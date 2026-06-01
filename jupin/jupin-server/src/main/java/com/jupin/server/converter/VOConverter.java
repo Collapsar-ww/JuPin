@@ -1,14 +1,18 @@
 package com.jupin.server.converter;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.jupin.common.constant.DbFieldConstant;
 import cn.hutool.core.bean.BeanUtil;
 import com.jupin.pojo.entity.*;
 import com.jupin.pojo.vo.*;
+import com.jupin.server.mapper.OrderMapper;
 import com.jupin.server.mapper.ShopMapper;
 import com.jupin.server.mapper.UserMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Component
@@ -17,6 +21,7 @@ public class VOConverter {
 
     private final UserMapper userMapper;
     private final ShopMapper shopMapper;
+    private final OrderMapper orderMapper;
 
     public PoolVO toPoolVO(CarPool pool) {
         PoolVO vo = BeanUtil.copyProperties(pool, PoolVO.class);
@@ -40,6 +45,12 @@ public class VOConverter {
         PoolVO vo = toPoolVO(pool);
         if (members != null) {
             vo.setMembers(members.stream().map(this::toMemberVO).collect(Collectors.toList()));
+            vo.setCompletedConfirmStarted(members.stream()
+                    .anyMatch(member -> member.getCompletedConfirmTime() != null)
+                    && members.stream().noneMatch(member -> Objects.equals(member.getCompletedConfirmed(), 2)));
+            vo.setFinishedConfirmStarted(members.stream()
+                    .anyMatch(member -> member.getFinishedConfirmTime() != null)
+                    && members.stream().noneMatch(member -> Objects.equals(member.getFinishedConfirmed(), 2)));
         }
         return vo;
     }
@@ -53,7 +64,19 @@ public class VOConverter {
             vo.setGender(user.getGender());
             vo.setCreditScore(user.getCreditScore());
         }
+        vo.setDepositOrderStatus(resolveOrderStatus(member, 0));
+        vo.setRemainingOrderStatus(resolveOrderStatus(member, 1));
         return vo;
+    }
+
+    private Integer resolveOrderStatus(PoolMember member, int type) {
+        Order order = orderMapper.selectOne(new QueryWrapper<Order>()
+                .eq(DbFieldConstant.POOL_ID, member.getPoolId())
+                .eq(DbFieldConstant.USER_ID, member.getUserId())
+                .eq(DbFieldConstant.TYPE, type)
+                .orderByDesc(DbFieldConstant.CREATE_TIME)
+                .last("LIMIT 1"));
+        return order == null ? null : order.getStatus();
     }
 
     public ReviewVO toReviewVO(Review review) {

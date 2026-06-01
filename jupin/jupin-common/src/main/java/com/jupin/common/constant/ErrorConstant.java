@@ -12,12 +12,15 @@ public class ErrorConstant {
     public static final String CANNOT_REMOVE_OWNER = "不能移除店长";
     public static final String CANNOT_UPDATE_PRICE_AFTER_COMPLETED = "成团后不能修改价格";
     public static final String CONFIRM_FAILED = "确认失败";
+    public static final String CONFIRM_ALREADY_STARTED = "确认流程已发起，请等待成员确认";
+    public static final String CONFIRM_NOT_STARTED = "确认流程尚未发起";
     public static final String CREDIT_TOO_LOW = "信用分过低，无法发布拼车";
     public static final String CURRENT_POOL_STATUS_CANNOT_PAY_DEPOSIT = "当前拼车状态不允许支付押金";
     public static final String CURRENT_STATUS_NO_CONFIRM_REQUIRED = "当前状态无需确认";
     public static final String DM_CANNOT_TRANSFER_AFTER_COMPLETED = "成团后不能转让DM";
     public static final String DM_NOT_SPECIFIED = "未指定DM";
     public static final String INVALID_ORDER_TYPE = "订单类型不合法";
+    public static final String IDEMPOTENT_KEY_CONFLICT = "幂等Key已被其他订单使用";
     public static final String INVALID_ROLE = "角色不合法，仅支持 player/shop";
     public static final String LEAVE_FAILED = "跳车失败";
     public static final String MEMBER_STATUS_CHANGED = "成员状态已变化，请刷新后重试";

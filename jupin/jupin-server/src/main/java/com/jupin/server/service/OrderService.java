@@ -5,7 +5,7 @@ import com.jupin.pojo.entity.Order;
 import java.util.List;
 
 public interface OrderService {
-    Order create(Long userId, Long poolId, Integer type);
+    Order create(Long userId, Long poolId, Integer type, String idempotentKey);
     void pay(Long userId, String orderNo);
     void refund(String orderNo);
     void release(Long orderId);

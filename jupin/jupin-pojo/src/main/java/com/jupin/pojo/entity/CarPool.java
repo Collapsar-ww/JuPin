@@ -42,4 +42,7 @@ public class CarPool {
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
+
+    @TableField(exist = false)
+    private Integer recommendScore;
 }

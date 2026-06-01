@@ -13,6 +13,8 @@ import com.jupin.pojo.vo.ConfirmVO;
 import com.jupin.pojo.vo.MemberPoolVO;
 import com.jupin.pojo.vo.RoleStatusVO;
 import com.jupin.server.mapper.*;
+import com.jupin.server.mq.TimeoutMessage;
+import com.jupin.server.mq.TimeoutProducer;
 import com.jupin.server.service.CreditService;
 import com.jupin.server.service.PoolService;
 import lombok.RequiredArgsConstructor;
@@ -20,11 +22,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.DayOfWeek;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -44,11 +49,25 @@ public class PoolServiceImpl implements PoolService {
     private final ShopMemberMapper shopMemberMapper;
     private final ScriptMapper scriptMapper;
     private final ShopScriptMapper shopScriptMapper;
+    private final PlayerPreferenceMapper preferenceMapper;
     private final OrderMapper orderMapper;
     private final PoolStateMachine stateMachine;
     private final RedissonClient redisson;
     private final StringRedisTemplate stringRedis;
     private final CreditService creditService;
+    private final SimpMessagingTemplate messagingTemplate;
+    private final TimeoutProducer timeoutProducer;
+
+    // Recommend scoring weights
+    private static final int SCORE_CITY = 50;
+    private static final int SCORE_SCRIPT_TYPE = 35;
+    private static final int SCORE_TIME_SLOT = 25;
+    private static final int SCORE_PRICE = 15;
+    private static final int SCORE_MEMBER_COUNT = 10;
+    private static final int MAX_RECOMMEND_FETCH = 500;
+    private static final long POOL_DETAIL_TTL_MINUTES = 10;
+    private static final long POOL_DETAIL_NULL_TTL_SECONDS = 60;
+    private static final long CONFIRM_TIMEOUT_HOURS = 2;
 
     @Override
     @Transactional
@@ -98,24 +117,13 @@ public class PoolServiceImpl implements PoolService {
                 .price(request.getPrice())
                 .deposit(request.getDeposit())
                 .joinType(request.getJoinType())
-                .dmId(request.getDmId() != null ? request.getDmId() : userId)
+                .dmId(resolveInitialDmId(type, userId, request.getDmId()))
                 .currentMembers(0)
                 .status(PoolStatus.OPEN)
                 .build();
         poolMapper.insert(pool);
 
-        if (type == 1) {
-            PoolMember ownerMember = PoolMember.builder()
-                    .poolId(pool.getId())
-                    .userId(userId)
-                    .role(1)
-                    .status(MemberStatus.JOINED)
-                    .joinTime(LocalDateTime.now())
-                    .build();
-            memberMapper.insert(ownerMember);
-            pool.setCurrentMembers(pool.getCurrentMembers() + 1);
-            poolMapper.updateById(pool);
-        } else {
+        if (type == 0) {
             PoolMember ownerMember = PoolMember.builder()
                     .poolId(pool.getId())
                     .userId(userId)
@@ -125,18 +133,33 @@ public class PoolServiceImpl implements PoolService {
                     .build();
             memberMapper.insert(ownerMember);
         }
+        sendPoolStartTimeout(pool);
         return pool;
     }
 
     @Override
     public CarPool getDetail(Long poolId) {
+        String cacheKey = RedisKeyConstant.POOL_DETAIL_PREFIX + poolId;
+        String cached = stringRedis.opsForValue().get(cacheKey);
+        if (RedisKeyConstant.CACHE_NULL.equals(cached)) {
+            throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        }
+        if (StringUtils.hasText(cached)) {
+            return JSONUtil.toBean(cached, CarPool.class);
+        }
+
         CarPool pool = poolMapper.selectById(poolId);
-        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        if (pool == null) {
+            stringRedis.opsForValue().set(cacheKey, RedisKeyConstant.CACHE_NULL, POOL_DETAIL_NULL_TTL_SECONDS, TimeUnit.SECONDS);
+            throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        }
+        stringRedis.opsForValue().set(cacheKey, JSONUtil.toJsonStr(pool),
+                POOL_DETAIL_TTL_MINUTES * 60 + new Random().nextInt(120), TimeUnit.SECONDS);
         return pool;
     }
 
     @Override
-    public List<CarPool> list(String city, String scriptType, Integer type, Integer status,
+    public List<CarPool> list(Long userId, String city, String scriptType, Integer type, Integer status,
                                BigDecimal priceMin, BigDecimal priceMax,
                                String startTimeAfter, String startTimeBefore,
                                Boolean recommend, Integer page, Integer size) {
@@ -150,10 +173,33 @@ public class PoolServiceImpl implements PoolService {
         if (priceMax != null) queryWrapper.le("price", priceMax);
         if (StringUtils.hasText(startTimeAfter)) queryWrapper.ge("start_time", startTimeAfter);
         if (StringUtils.hasText(startTimeBefore)) queryWrapper.le("start_time", startTimeBefore);
-        queryWrapper.orderByDesc(DbFieldConstant.CREATE_TIME);
+        if (!Boolean.TRUE.equals(recommend)) {
+            queryWrapper.orderByDesc(DbFieldConstant.CREATE_TIME);
 
-        Page<CarPool> pageResult = poolMapper.selectPage(new Page<>(page, size), queryWrapper);
-        return pageResult.getRecords();
+            Page<CarPool> pageResult = poolMapper.selectPage(new Page<>(page, size), queryWrapper);
+            return pageResult.getRecords();
+        }
+
+        // Recommend mode: fetch up to MAX_RECOMMEND_FETCH rows, score in memory, sort, page
+        queryWrapper.last("LIMIT " + MAX_RECOMMEND_FETCH);
+        List<CarPool> pools = poolMapper.selectList(queryWrapper);
+        if (pools.isEmpty()) return pools;
+
+        PlayerPreference preference = getPreference(userId);
+        Map<Long, Integer> scoreMap = pools.stream()
+                .collect(Collectors.toMap(CarPool::getId, p -> calculateRecommendScore(p, preference)));
+
+        List<CarPool> result = pools.stream()
+                .sorted(Comparator.<CarPool, Integer>comparing(p -> scoreMap.getOrDefault(p.getId(), 0)).reversed()
+                        .thenComparing(CarPool::getCreateTime, Comparator.nullsLast(Comparator.reverseOrder())))
+                .skip((long) Math.max(page - 1, 0) * size)
+                .limit(size)
+                .collect(Collectors.toList());
+
+        for (CarPool pool : result) {
+            pool.setRecommendScore(scoreMap.getOrDefault(pool.getId(), 0));
+        }
+        return result;
     }
 
     @Override
@@ -176,6 +222,7 @@ public class PoolServiceImpl implements PoolService {
                 .set(DbFieldConstant.REFUND_REASON, ErrorConstant.REFUND_REASON_POOL_CANCELLED)
                 .eq(DbFieldConstant.POOL_ID, poolId)
                 .eq(DbFieldConstant.STATUS, OrderStatus.PAID));
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -215,6 +262,7 @@ public class PoolServiceImpl implements PoolService {
                         .build();
                 memberMapper.insert(member);
             }
+            evictPoolDetail(poolId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BaseException(ErrorConstant.SYSTEM_BUSY);
@@ -253,6 +301,7 @@ public class PoolServiceImpl implements PoolService {
             if (joined) {
                 pool.setCurrentMembers(Math.max(0, pool.getCurrentMembers() - 1));
                 poolMapper.updateById(pool);
+                evictPoolDetail(poolId);
 
                 if (pool.getStatus() == PoolStatus.FULL) {
                     stateMachine.rollbackToOpen(poolId);
@@ -290,6 +339,7 @@ public class PoolServiceImpl implements PoolService {
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("status", MemberStatus.PENDING_PAYMENT)
                 .eq("pool_id", poolId).eq("user_id", targetUserId).eq("status", MemberStatus.PENDING_REVIEW));
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -302,6 +352,7 @@ public class PoolServiceImpl implements PoolService {
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("status", MemberStatus.REJECTED)
                 .eq("pool_id", poolId).eq("user_id", targetUserId).eq("status", MemberStatus.PENDING_REVIEW));
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -316,6 +367,7 @@ public class PoolServiceImpl implements PoolService {
         }
         pool.setPrice(price);
         poolMapper.updateById(pool);
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -338,6 +390,7 @@ public class PoolServiceImpl implements PoolService {
 
         pool.setDmId(newDmId);
         poolMapper.updateById(pool);
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -357,6 +410,7 @@ public class PoolServiceImpl implements PoolService {
 
         pool.setDmId(dmId);
         poolMapper.updateById(pool);
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -366,18 +420,113 @@ public class PoolServiceImpl implements PoolService {
         if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         if (!pool.getOwnerId().equals(userId)) throw new BaseException(ErrorConstant.ONLY_OWNER_CAN_CONFIRM);
         if (pool.getStatus() != PoolStatus.FULL) throw new BaseException(ErrorConstant.POOL_NOT_FULL);
-        if (pool.getDmId() == null) throw new BaseException(ErrorConstant.DM_NOT_SPECIFIED);
-
-        memberMapper.update(null, new UpdateWrapper<PoolMember>()
-                .set("completed_confirmed", ConfirmStatus.UNCONFIRMED)
-                .set("completed_confirm_time", null)
-                .eq("pool_id", poolId));
+        ensureDmSpecified(pool);
 
         List<PoolMember> members = memberMapper.selectList(new QueryWrapper<PoolMember>()
                 .eq("pool_id", poolId).eq("status", MemberStatus.JOINED));
-        long total = members.size();
+        if (members.size() != pool.getMaxMembers()) {
+            syncCurrentMembers(pool, members.size());
+            throw new BaseException(ErrorConstant.POOL_NOT_FULL);
+        }
+        boolean confirmationStarted = members.stream()
+                .anyMatch(member -> member.getCompletedConfirmTime() != null);
+        boolean anyRejected = members.stream()
+                .anyMatch(member -> member.getCompletedConfirmed() == ConfirmStatus.REJECTED);
+        if (confirmationStarted && !anyRejected) {
+            throw new BaseException(ErrorConstant.CONFIRM_ALREADY_STARTED);
+        }
+        LocalDateTime now = LocalDateTime.now();
+        memberMapper.update(null, new UpdateWrapper<PoolMember>()
+                .set("completed_confirmed", ConfirmStatus.UNCONFIRMED)
+                .set("completed_confirm_time", now)
+                .eq("pool_id", poolId).eq("status", MemberStatus.JOINED));
 
-        return new ConfirmVO(poolId, 0, total, false);
+        publishPoolEvent(poolId, "COMPLETED_CONFIRM_STARTED");
+        timeoutProducer.send(new TimeoutMessage(TimeoutMessage.COMPLETED_CONFIRM, null, poolId, null),
+                TimeUnit.HOURS.toMillis(CONFIRM_TIMEOUT_HOURS));
+        evictPoolDetail(poolId);
+        return new ConfirmVO(poolId, 0, members.size(), false);
+    }
+
+    private Long resolveInitialDmId(Integer type, Long ownerId, Long requestDmId) {
+        if (requestDmId != null) return requestDmId;
+        return Objects.equals(type, 0) ? ownerId : null;
+    }
+
+    private void ensureDmSpecified(CarPool pool) {
+        if (pool.getDmId() != null) return;
+        if (Objects.equals(pool.getType(), 0)) {
+            PoolMember ownerMember = memberMapper.selectOne(new QueryWrapper<PoolMember>()
+                    .eq(DbFieldConstant.POOL_ID, pool.getId())
+                    .eq(DbFieldConstant.USER_ID, pool.getOwnerId())
+                    .eq(DbFieldConstant.STATUS, MemberStatus.JOINED));
+            if (ownerMember != null) {
+                pool.setDmId(pool.getOwnerId());
+                poolMapper.updateById(pool);
+                return;
+            }
+        }
+        throw new BaseException(ErrorConstant.DM_NOT_SPECIFIED);
+    }
+
+    private PlayerPreference getPreference(Long userId) {
+        if (userId == null) return null;
+        return preferenceMapper.selectOne(new QueryWrapper<PlayerPreference>().eq(DbFieldConstant.USER_ID, userId));
+    }
+
+    private int calculateRecommendScore(CarPool pool, PlayerPreference preference) {
+        if (preference == null) return 0;
+        int score = 0;
+        if (StringUtils.hasText(preference.getCity()) && Objects.equals(preference.getCity(), pool.getCity())) {
+            score += SCORE_CITY;
+        }
+        if (StringUtils.hasText(preference.getScriptType()) && Objects.equals(preference.getScriptType(), pool.getScriptType())) {
+            score += SCORE_SCRIPT_TYPE;
+        }
+        if (isPriceMatched(pool.getPrice(), preference.getPriceMin(), preference.getPriceMax())) {
+            score += SCORE_PRICE;
+        }
+        if (isMemberCountMatched(pool.getMaxMembers(), preference.getMinMembers(), preference.getMaxMembers())) {
+            score += SCORE_MEMBER_COUNT;
+        }
+        if (isTimeSlotMatched(pool.getStartTime(), preference.getTimeSlot())) {
+            score += SCORE_TIME_SLOT;
+        }
+        return score;
+    }
+
+    private boolean isTimeSlotMatched(LocalDateTime startTime, String timeSlot) {
+        if (startTime == null || !StringUtils.hasText(timeSlot)) return false;
+        DayOfWeek day = startTime.getDayOfWeek();
+        int hour = startTime.getHour();
+        switch (timeSlot) {
+            case "WEEKDAY_NIGHT":
+                return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY && hour >= 18;
+            case "WEEKEND_AFTERNOON":
+                return (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) && hour >= 12 && hour < 18;
+            case "WEEKEND_NIGHT":
+                return (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) && hour >= 18;
+            default:
+                return false;
+        }
+    }
+
+    private boolean isPriceMatched(BigDecimal price, BigDecimal priceMin, BigDecimal priceMax) {
+        if (price == null || (priceMin == null && priceMax == null)) return false;
+        if (priceMin != null && price.compareTo(priceMin) < 0) return false;
+        return priceMax == null || price.compareTo(priceMax) <= 0;
+    }
+
+    private boolean isMemberCountMatched(Integer maxMembers, Integer minMembers, Integer preferredMaxMembers) {
+        if (maxMembers == null || (minMembers == null && preferredMaxMembers == null)) return false;
+        if (minMembers != null && maxMembers < minMembers) return false;
+        return preferredMaxMembers == null || maxMembers <= preferredMaxMembers;
+    }
+
+    private void syncCurrentMembers(CarPool pool, int joinedCount) {
+        if (pool.getCurrentMembers() != null && pool.getCurrentMembers() == joinedCount) return;
+        pool.setCurrentMembers(joinedCount);
+        poolMapper.updateById(pool);
     }
 
     @Override
@@ -414,6 +563,9 @@ public class PoolServiceImpl implements PoolService {
             boolean isCompleteConfirm;
 
             if (pool.getStatus() == PoolStatus.FULL) {
+                if (member.getCompletedConfirmTime() == null) {
+                    throw new BaseException(ErrorConstant.CONFIRM_NOT_STARTED);
+                }
                 if (member.getCompletedConfirmed() != ConfirmStatus.UNCONFIRMED) {
                     throw new BaseException(ErrorConstant.ALREADY_CONFIRMED);
                 }
@@ -424,6 +576,9 @@ public class PoolServiceImpl implements PoolService {
 
                 isCompleteConfirm = true;
             } else if (pool.getStatus() == PoolStatus.COMPLETED) {
+                if (member.getFinishedConfirmTime() == null) {
+                    throw new BaseException(ErrorConstant.CONFIRM_NOT_STARTED);
+                }
                 if (member.getFinishedConfirmed() != ConfirmStatus.UNCONFIRMED) {
                     throw new BaseException(ErrorConstant.ALREADY_CONFIRMED);
                 }
@@ -445,8 +600,12 @@ public class PoolServiceImpl implements PoolService {
                 boolean anyRejected = allMembers.stream().anyMatch(poolMember -> poolMember.getCompletedConfirmed() == ConfirmStatus.REJECTED);
                 if (!anyRejected && confirmedCount == allMembers.size()) {
                     stateMachine.toCompleted(poolId);
+                    publishPoolEvent(poolId, "POOL_COMPLETED");
+                    evictPoolDetail(poolId);
                     return new ConfirmVO(poolId, confirmedCount, allMembers.size(), true);
                 }
+                publishPoolEvent(poolId, "COMPLETED_CONFIRM_UPDATED");
+                evictPoolDetail(poolId);
                 return new ConfirmVO(poolId, confirmedCount, allMembers.size(), false);
             } else {
                 confirmedCount = (int) allMembers.stream().filter(poolMember -> poolMember.getFinishedConfirmed() == ConfirmStatus.CONFIRMED).count();
@@ -457,8 +616,12 @@ public class PoolServiceImpl implements PoolService {
                 boolean canFinish = timeElapsed ? (confirmedCount > allMembers.size() / 2) : allConfirmed;
                 if (canFinish) {
                     stateMachine.toFinished(poolId);
+                    publishPoolEvent(poolId, "POOL_FINISHED");
+                    evictPoolDetail(poolId);
                     return new ConfirmVO(poolId, confirmedCount, allMembers.size(), true);
                 }
+                publishPoolEvent(poolId, "FINISHED_CONFIRM_UPDATED");
+                evictPoolDetail(poolId);
                 return new ConfirmVO(poolId, confirmedCount, allMembers.size(), false);
             }
         } catch (InterruptedException e) {
@@ -477,16 +640,38 @@ public class PoolServiceImpl implements PoolService {
         if (!pool.getOwnerId().equals(userId)) throw new BaseException(ErrorConstant.ONLY_OWNER_CAN_FINISH_CONFIRM);
         if (pool.getStatus() != PoolStatus.COMPLETED) throw new BaseException(ErrorConstant.POOL_NOT_COMPLETED);
 
-        memberMapper.update(null, new UpdateWrapper<PoolMember>()
-                .set("finished_confirmed", ConfirmStatus.UNCONFIRMED)
-                .set("finished_confirm_time", null)
-                .eq("pool_id", poolId));
-
         List<PoolMember> members = memberMapper.selectList(new QueryWrapper<PoolMember>()
                 .eq("pool_id", poolId).eq("status", MemberStatus.JOINED));
-        long total = members.size();
+        boolean confirmationStarted = members.stream()
+                .anyMatch(member -> member.getFinishedConfirmTime() != null);
+        boolean anyRejected = members.stream()
+                .anyMatch(member -> member.getFinishedConfirmed() == ConfirmStatus.REJECTED);
+        if (confirmationStarted && !anyRejected) {
+            throw new BaseException(ErrorConstant.CONFIRM_ALREADY_STARTED);
+        }
+        LocalDateTime now = LocalDateTime.now();
+        memberMapper.update(null, new UpdateWrapper<PoolMember>()
+                .set("finished_confirmed", ConfirmStatus.UNCONFIRMED)
+                .set("finished_confirm_time", now)
+                .eq("pool_id", poolId).eq("status", MemberStatus.JOINED));
 
-        return new ConfirmVO(poolId, 0, total, false);
+        publishPoolEvent(poolId, "FINISHED_CONFIRM_STARTED");
+        timeoutProducer.send(new TimeoutMessage(TimeoutMessage.FINISHED_CONFIRM, null, poolId, null),
+                TimeUnit.HOURS.toMillis(CONFIRM_TIMEOUT_HOURS));
+        evictPoolDetail(poolId);
+        return new ConfirmVO(poolId, 0, members.size(), false);
+    }
+
+    private void publishPoolEvent(Long poolId, String event) {
+        try {
+            messagingTemplate.convertAndSend("/topic/pool/" + poolId, Map.of(
+                    "event", event,
+                    "poolId", poolId,
+                    "time", LocalDateTime.now().toString()
+            ));
+        } catch (Exception e) {
+            log.warn("publish pool event failed, poolId={}, event={}", poolId, event, e);
+        }
     }
 
     @Override
@@ -505,6 +690,7 @@ public class PoolServiceImpl implements PoolService {
         memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("selected_role", roleName)
                 .eq("pool_id", poolId).eq("user_id", userId));
+        evictPoolDetail(poolId);
     }
 
     @Override
@@ -559,5 +745,15 @@ public class PoolServiceImpl implements PoolService {
         if (hoursUntilStart > 24) return "距开团超过24小时跳车";
         if (hoursUntilStart > 2) return "距开团不足24小时跳车";
         return "距开团不足2小时跳车";
+    }
+
+    private void sendPoolStartTimeout(CarPool pool) {
+        if (pool.getStartTime() == null) return;
+        long delayMillis = Duration.between(LocalDateTime.now(), pool.getStartTime()).toMillis();
+        timeoutProducer.send(new TimeoutMessage(TimeoutMessage.POOL_START, null, pool.getId(), null), delayMillis);
+    }
+
+    private void evictPoolDetail(Long poolId) {
+        stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + poolId);
     }
 }

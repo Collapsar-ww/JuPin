@@ -67,7 +67,7 @@ public class PlayerPoolController {
             @RequestParam(required = false) Boolean recommend,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "10") Integer size) {
-        List<CarPool> pools = poolService.list(city, scriptType, 0, status,
+        List<CarPool> pools = poolService.list(BaseContext.getCurrentId(), city, scriptType, 0, status,
                 priceMin, priceMax, startTimeAfter, startTimeBefore, recommend, page, size);
         List<PoolVO> vos = pools.stream().map(converter::toPoolVO).collect(Collectors.toList());
         return Result.success(vos);

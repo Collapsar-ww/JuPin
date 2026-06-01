@@ -1,5 +1,85 @@
 # 项目日志
 
+## 日期：2026-06-02
+
+### 本轮操作：订单幂等、Redis Cache Aside、RabbitMQ 死信超时处理落地
+
+#### 1. 订单幂等机制
+
+**目标：** 解决前端重复点击、网络重试、支付重复请求导致的重复下单和重复支付问题。
+
+**实现内容：**
+- `OrderCreateRequest` 增加 `idempotentKey`，创建订单时支持客户端传入业务幂等键。
+- `Order` / `OrderVO` 增加 `idempotentKey`、`payRequestNo`、`callbackRequestNo`、`expireTime` 字段。
+- `OrderService.create()` 改为按 `userId + idempotentKey` 查询历史订单；重复请求直接返回已有订单。
+- 未传 `idempotentKey` 时，后端默认使用 `userId:poolId:type` 作为稳定业务键，兼容旧前端。
+- 支付状态更新改为数据库条件更新，仅允许 `PENDING -> PAID`；重复支付命中已支付订单时幂等返回。
+- 初始化 SQL 增加 `uk_user_idempotent_key`、`uk_channel_txn_id`、`idx_status_expire` 等索引。
+
+#### 2. Redis Cache Aside 缓存
+
+**目标：** 降低拼车详情高频读取对 MySQL 的压力，并缓解不存在 ID 带来的缓存穿透。
+
+**实现内容：**
+- 新增 Redis Key 常量：`pool:detail:` 和空值占位 `__NULL__`。
+- `PoolServiceImpl.getDetail(poolId)` 改造为 Cache Aside：
+  - 先读 Redis；
+  - 命中 JSON 直接返回；
+  - 命中空值缓存直接返回不存在；
+  - 未命中查 MySQL；
+  - 存在数据写入 Redis，TTL 为 10 分钟 + 随机抖动；
+  - 不存在数据写入 60 秒空值缓存。
+- 拼车相关写操作后删除 `pool:detail:{poolId}`，包括加入、退出、取消、审核、支付成功、改价、DM 指派/转让、确认流程、角色选择等。
+
+#### 3. RabbitMQ 死信超时处理
+
+**目标：** 将订单超时、拼车超时、确认超时从主交易链路中解耦，避免依赖同步定时扫描。
+
+**实现内容：**
+- `RabbitConfig` 新增延迟交换机、延迟队列、死信交换机和超时消费队列：
+  - `timeout.delay.exchange`
+  - `timeout.delay.queue`
+  - `timeout.dlx.exchange`
+  - `timeout.queue`
+- 新增 `TimeoutMessage`、`TimeoutProducer`、`TimeoutConsumer`。
+- 创建订单后投递支付超时消息：
+  - 押金订单 15 分钟未支付：订单标记逾期，成员从待支付回退为退出。
+  - 尾款订单 24 小时未支付：订单标记逾期，信用分扣 10。
+- 创建拼车后投递开局超时消息：到开始时间仍为 `OPEN` 且无人正式加入时自动取消。
+- 发起成团确认/结束确认后投递确认超时消息：消费端重新查库，满足条件才推进状态。
+- 消费端所有处理都先查库再条件更新，重复消息可幂等跳过。
+
+#### 4. 项目文档与 SQL
+
+**文档更新：**
+- `剧本杀拼车系统_项目文档.md` 增加 v3.0 版本记录。
+- 补充订单幂等、Cache Aside、RabbitMQ 死信队列设计和测试说明。
+- 将后续优化章节中的对应模块从“待落地”更新为“已落地 + 后续优化”。
+
+**SQL 更新：**
+- 同步更新根目录 `sql/init.sql` 和 `jupin/sql/init.sql`。
+- 订单表增加幂等、支付请求、回调请求、过期时间字段和相关索引。
+
+#### 5. 验证说明
+
+- 用户已在本地完成编译运行验证。
+- 本轮曾尝试本地 Maven 编译，但当前环境无 `mvn` 和 Maven Wrapper。
+- 曾尝试 Docker 构建验证，初次受 Docker daemon 沙箱权限限制；提权后遇到基础镜像平台 manifest 问题，后续显式平台构建被中断，因此最终以用户本地编译运行为准。
+
+#### 6. 修改文件清单
+
+| 文件 | 修改内容 |
+|------|---------|
+| `jupin/jupin-pojo/src/main/java/com/jupin/pojo/dto/OrderCreateRequest.java` | 新增订单创建幂等 Key |
+| `jupin/jupin-pojo/src/main/java/com/jupin/pojo/entity/Order.java` | 新增幂等、支付请求、回调请求、过期时间字段 |
+| `jupin/jupin-pojo/src/main/java/com/jupin/pojo/vo/OrderVO.java` | 返回订单幂等 Key 和过期时间 |
+| `jupin/jupin-server/src/main/java/com/jupin/server/service/impl/OrderServiceImpl.java` | 实现创建订单幂等、支付条件更新、订单超时消息投递 |
+| `jupin/jupin-server/src/main/java/com/jupin/server/service/impl/PoolServiceImpl.java` | 实现拼车详情 Cache Aside、写后缓存失效、拼车/确认超时消息投递 |
+| `jupin/jupin-server/src/main/java/com/jupin/server/config/RabbitConfig.java` | 新增超时延迟队列和死信队列配置 |
+| `jupin/jupin-server/src/main/java/com/jupin/server/mq/*` | 新增超时消息、生产者、消费者 |
+| `sql/init.sql` / `jupin/sql/init.sql` | 增加订单幂等字段和索引 |
+| `剧本杀拼车系统_项目文档.md` | 写入 v3.0 技术方案 |
+
 ## 日期：2026-05-20
 
 ### 项目进度
@@ -974,3 +1054,63 @@ APP_PORT=8081 docker compose up -d app
 - 本地开发配置中 Redis 访问宿主机端口 `localhost:6380`。
 - Docker 容器内部访问 Redis 必须使用服务名和容器端口 `redis:6379`。
 - `localhost` 可能被系统代理影响，接口验证优先使用 `127.0.0.1` 并加 `--noproxy '*'`。
+
+---
+
+## 日期：2026-05-24（第二段）
+
+### 本轮操作：后端编译与 Docker 构建修复
+
+#### 1. 问题现象
+
+当前项目突然无法正常编译运行。前端执行 `npm run build` 可以通过，问题集中在后端 Java 编译和 Docker 构建链路。
+
+本地环境中没有可用的 `mvn` 命令，也没有 Maven Wrapper（`./mvnw`），因此后端编译主要通过 Docker 镜像构建进行验证。
+
+#### 2. 根因分析
+
+| 问题位置 | 根因 |
+|---------|------|
+| `MessageServiceImpl.getList()` | 分页变量从 `p` 改为 `pageResult` 后，返回处仍使用旧变量 `p.getRecords()`，导致 Java 编译失败 |
+| `PoolServiceImpl.create()` | 引用了不存在的 `ErrorConstant.SHOP_SCRIPT_NOT_IN_LIBRARY`，实际已有常量是 `ErrorConstant.SCRIPT_NOT_IN_LIBRARY` |
+| `PoolServiceImpl.doConfirm()` | 方法内已有局部变量 `member`，stream lambda 又使用 `member -> ...`，Java 不允许在重叠作用域重复声明同名变量 |
+| `Dockerfile` | 使用 `RUN --mount=type=cache,target=/root/.m2`，该语法依赖 BuildKit/buildx；当前本地 Docker 缺少可用 buildx 支持，导致构建失败 |
+
+#### 3. 修复内容
+
+| 文件 | 修改内容 |
+|------|---------|
+| `jupin/jupin-server/src/main/java/com/jupin/server/service/impl/MessageServiceImpl.java` | 将返回值修正为 `pageResult.getRecords()` |
+| `jupin/jupin-server/src/main/java/com/jupin/server/service/impl/PoolServiceImpl.java` | 将错误常量改为 `ErrorConstant.SCRIPT_NOT_IN_LIBRARY`；将 lambda 参数从 `member` 改为 `poolMember`，避免变量名冲突 |
+| `jupin/Dockerfile` | 去除 BuildKit 专用 `RUN --mount` 语法，改为普通 `RUN mvn -pl jupin-server -am package -Dmaven.test.skip=true -B` |
+
+#### 4. 验证结果
+
+前端构建：
+
+```bash
+cd jupin-web
+npm run build
+```
+
+结果：构建通过，仅有 Vite/Rolldown 体积和注释相关 warning，不影响产物生成。
+
+后端 Docker 编译验证：
+
+```bash
+cd jupin
+docker build --target builder -t jupin-backend-compile-check .
+```
+
+结果：
+- `jupin-common` 编译成功
+- `jupin-pojo` 编译成功
+- `jupin-server` 编译成功
+- Maven 输出 `BUILD SUCCESS`
+- Docker 镜像构建成功，生成 `jupin-backend-compile-check:latest`
+
+#### 5. 后续注意
+
+- 当前 Dockerfile 不再依赖 BuildKit，因此兼容性更好。
+- 代价是首次 Docker 构建会重新下载 Maven 依赖，速度较慢。本次首次完整验证耗时约 21 分钟。
+- 如果后续开发环境稳定支持 buildx/BuildKit，可以再考虑恢复 Maven cache mount，提高 Docker 构建速度。
