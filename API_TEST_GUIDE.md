@@ -405,6 +405,144 @@ FROM `user`
 WHERE id = 1;
 ```
 
+### 4.15 超时通知链路测试
+
+**目的：** 验证 `TimeoutConsumer` 在超时状态变更成功后，会写入站内消息，并向 `/topic/pool/{poolId}` 推送刷新事件；重复超时消息不会重复写通知。
+
+测试前准备：
+
+- 后端已启动，RabbitMQ / MySQL / Redis 正常。
+- 按 4.1-4.8 创建一个新的玩家局和待支付押金订单，记录：
+
+```text
+playerUserId = 24
+poolId = 12
+depositOrderId = 6
+```
+
+> 注意：如果要测试“延迟队列 TTL 到期”，从 `timeout.delay.exchange` 投递，并确保对应延迟队列中没有更长 TTL 消息排在队头。RabbitMQ per-message TTL 在同一个队列内仍有队头阻塞特性。
+> 如果本节只验证“消费者通知链路”，可直接投递到 `timeout.dlx.exchange`，模拟 TTL 到期后的死信入队。
+
+#### 4.15.1 押金逾期通知
+
+RabbitMQ 管理页手工投递：
+
+- Exchange：`timeout.dlx.exchange`
+- Routing key：`timeout.routing`
+- Payload：
+
+```json
+{
+  "type": "ORDER_DEPOSIT_PAYMENT",
+  "orderId": 6,
+  "poolId": 12,
+  "userId": 24
+}
+```
+
+数据库验证：
+
+```sql
+SELECT id, type, status, pool_id, user_id
+FROM `order`
+WHERE id = 6;
+
+SELECT id, pool_id, user_id, status, leave_time
+FROM pool_member
+WHERE pool_id = 12 AND user_id = 24;
+
+SELECT id, msg_key, user_id, type, title, content, related_id
+FROM message
+WHERE msg_key = 'timeout_deposit_6_24';
+```
+
+验收点：
+
+- 订单 `status = 4`
+- 成员 `status = 3`
+- 站内消息存在且只有一条：`timeout_deposit_6_24`
+- 订阅 `/topic/pool/12` 时，可收到 `DEPOSIT_PAYMENT_OVERDUE`
+
+重复投递同一条 payload，再执行：
+
+```sql
+SELECT msg_key, COUNT(*) AS cnt
+FROM message
+WHERE msg_key = 'timeout_deposit_6_24'
+GROUP BY msg_key;
+```
+
+验收点：
+
+- `cnt = 1`
+- 订单和成员状态不回滚、不重复变化
+
+#### 4.15.2 拼车开始超时取消通知
+
+准备一个 `OPEN` 且 `current_members = 0` 的测试拼车；如需缩短验证时间，可在测试库手工把开始时间改到过去：
+
+```sql
+UPDATE car_pool
+SET start_time = '2026-06-01 14:00:00'
+WHERE id = 12;
+```
+
+RabbitMQ 管理页手工投递：
+
+- Exchange：`timeout.dlx.exchange`
+- Routing key：`timeout.routing`
+- Payload：
+
+```json
+{
+  "type": "POOL_START",
+  "poolId": 12
+}
+```
+
+数据库验证：
+
+```sql
+SELECT id, status, current_members, start_time, owner_id
+FROM car_pool
+WHERE id = 12;
+
+SELECT id, msg_key, user_id, type, title, content, related_id
+FROM message
+WHERE msg_key = 'timeout_pool_start_12_24';
+```
+
+验收点：
+
+- 拼车 `status = 4`
+- 发布人站内消息存在且只有一条：`timeout_pool_start_12_24`
+- 订阅 `/topic/pool/12` 时，可收到 `POOL_START_TIMEOUT_CANCELLED`
+
+重复投递同一条 payload 后验证：
+
+```sql
+SELECT msg_key, COUNT(*) AS cnt
+FROM message
+WHERE msg_key = 'timeout_pool_start_12_24'
+GROUP BY msg_key;
+```
+
+验收点：
+
+- `cnt = 1`
+- 拼车仍为 `status = 4`
+
+RabbitMQ 队列验证：
+
+```bash
+curl -u guest:guest http://localhost:15672/api/queues/%2F/timeout.queue
+```
+
+验收点：
+
+- `messages = 0`
+- `messages_unacknowledged = 0`
+
 ## 5. 店家端最小测试顺序
 
 ### 5.1 注册店家账号
