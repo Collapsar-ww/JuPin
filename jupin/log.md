@@ -2,6 +2,32 @@
 
 ## 日期：2026-06-02
 
+### 本轮操作：补充超时处理通知链路
+
+#### 1. 实现内容
+
+- `TimeoutConsumer` 注入 `MessageService` 和 `SimpMessagingTemplate`。
+- 押金逾期在订单 `PENDING -> OVERDUE` 成功后：
+  - 将待支付成员置为 `LEFT`；
+  - 写入站内消息“押金订单逾期”；
+  - 事务提交后推送 `/topic/pool/{poolId}` 的 `DEPOSIT_PAYMENT_OVERDUE` 事件。
+- 尾款逾期在订单 `PENDING -> OVERDUE` 成功后：
+  - 扣减信用分 10 分；
+  - 写入站内消息“尾款逾期”；
+  - 事务提交后推送 `FINAL_PAYMENT_OVERDUE` 事件。
+- 拼车开始超时取消在 `OPEN -> CANCELLED` 条件更新成功后，给发布人写入站内消息，并推送 `POOL_START_TIMEOUT_CANCELLED` 事件。
+- 成团确认/结束确认超时兜底在状态推进成功后，给当前正式成员写入站内消息，并推送确认兜底完成事件。
+
+#### 2. 幂等策略
+
+- 站内消息复用 `message.msg_key` 唯一索引，重复超时消息重复插入会被忽略。
+- 通知只在数据库条件更新成功或状态机推进成功后触发。
+- WebSocket 推送注册到事务提交后执行，推送失败只记录 warning，不影响超时消费主流程。
+
+#### 3. 文档
+
+- 更新 `剧本杀拼车系统_项目文档.md`，补充超时通知规则，并将“超时处理后的通知链路”从待处理项移入已处理记录。
+
 ### 本轮操作：订单幂等、Redis Cache Aside、RabbitMQ 死信超时处理落地
 
 #### 1. 订单幂等机制
