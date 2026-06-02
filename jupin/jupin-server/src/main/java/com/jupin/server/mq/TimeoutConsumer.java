@@ -38,7 +38,7 @@ public class TimeoutConsumer {
     @Transactional
     public void handle(String body) {
         TimeoutMessage message = JSONUtil.toBean(body, TimeoutMessage.class);
-        if (TimeoutMessage.ORDER_PAYMENT.equals(message.getType())) {
+        if (isOrderPaymentTimeout(message.getType())) {
             handleOrderPaymentTimeout(message);
         } else if (TimeoutMessage.POOL_START.equals(message.getType())) {
             handlePoolStartTimeout(message);
@@ -47,6 +47,12 @@ public class TimeoutConsumer {
         } else if (TimeoutMessage.FINISHED_CONFIRM.equals(message.getType())) {
             handleFinishedConfirmTimeout(message);
         }
+    }
+
+    private boolean isOrderPaymentTimeout(String type) {
+        return TimeoutMessage.ORDER_PAYMENT.equals(type)
+                || TimeoutMessage.ORDER_DEPOSIT_PAYMENT.equals(type)
+                || TimeoutMessage.ORDER_FINAL_PAYMENT.equals(type);
     }
 
     private void handleOrderPaymentTimeout(TimeoutMessage message) {

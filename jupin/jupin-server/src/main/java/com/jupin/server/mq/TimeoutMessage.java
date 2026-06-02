@@ -9,6 +9,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class TimeoutMessage {
     public static final String ORDER_PAYMENT = "ORDER_PAYMENT";
+    public static final String ORDER_DEPOSIT_PAYMENT = "ORDER_DEPOSIT_PAYMENT";
+    public static final String ORDER_FINAL_PAYMENT = "ORDER_FINAL_PAYMENT";
     public static final String POOL_START = "POOL_START";
     public static final String COMPLETED_CONFIRM = "COMPLETED_CONFIRM";
     public static final String FINISHED_CONFIRM = "FINISHED_CONFIRM";

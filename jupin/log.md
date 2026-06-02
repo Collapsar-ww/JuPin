@@ -158,6 +158,38 @@ pool_member.status=3
 
 因此在测试环境手工验证 5 秒超时时，需要先清空 `timeout.delay.queue`，再投递短 TTL 测试消息。生产优化方向是拆分不同业务类型/不同延迟级别的延迟队列，或引入 RabbitMQ delayed message exchange 插件。
 
+### 本轮操作：RabbitMQ 延迟队列拆分优化
+
+#### 1. 优化背景
+
+4.14 接口测试发现，原 `timeout.delay.queue` 使用 RabbitMQ per-message TTL 承接所有超时任务。该模式在单队列下存在队头阻塞：长 TTL 的 `POOL_START` 消息排在队头时，后面的短 TTL 订单测试消息即使已到期，也无法及时进入死信队列。
+
+#### 2. 修复内容
+
+- `RabbitConfig` 将单一延迟队列拆分为 4 类业务延迟队列：
+  - `timeout.order.deposit.delay.queue`
+  - `timeout.order.final.delay.queue`
+  - `timeout.pool.start.delay.queue`
+  - `timeout.confirm.delay.queue`
+- `TimeoutMessage` 新增 `ORDER_DEPOSIT_PAYMENT`、`ORDER_FINAL_PAYMENT`，区分押金超时和尾款超时。
+- `TimeoutProducer` 根据消息类型选择对应 routing key：
+  - 押金：`timeout.order.deposit.delay.routing`
+  - 尾款：`timeout.order.final.delay.routing`
+  - 拼车开始：`timeout.pool.start.delay.routing`
+  - 确认兜底：`timeout.confirm.delay.routing`
+- `TimeoutConsumer` 继续统一监听 `timeout.queue`，消费端业务处理逻辑不拆散。
+- `OrderServiceImpl.create()` 创建订单后按订单类型投递押金或尾款超时消息。
+
+#### 3. 文档同步
+
+- `API_TEST_GUIDE.md` 4.14 已更新为向 `timeout.order.deposit.delay.routing` 投递 5 秒押金超时测试消息。
+- `剧本杀拼车系统_项目文档.md` 已将 RabbitMQ 延迟队列拆分写入 1.8.2，并把单延迟队列队头阻塞记录到修正部分。
+- 待处理问题新增后续优化项：超时通知链路、尾款自动创建、资金托管释放/退款闭环、Mock 支付回调模型、前端开发/测试入口、后端接口集成测试。
+
+#### 4. 后续验证要求
+
+后端重启后 Spring 会声明新的 RabbitMQ 队列和绑定。重启后按 `API_TEST_GUIDE.md` 4.14 重新投递测试消息，不再需要清空原 `timeout.delay.queue`。
+
 ## 日期：2026-05-20
 
 ### 项目进度

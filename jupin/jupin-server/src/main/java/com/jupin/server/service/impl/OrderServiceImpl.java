@@ -120,9 +120,15 @@ public class OrderServiceImpl implements OrderService {
             if (existing != null) return existing;
             throw e;
         }
-        timeoutProducer.send(new TimeoutMessage(TimeoutMessage.ORDER_PAYMENT, order.getId(), poolId, userId),
+        timeoutProducer.send(new TimeoutMessage(resolvePaymentTimeoutType(type), order.getId(), poolId, userId),
                 type == 0 ? TimeUnit.MINUTES.toMillis(DEPOSIT_PAY_TIMEOUT_MINUTES) : TimeUnit.HOURS.toMillis(FINAL_PAY_TIMEOUT_HOURS));
         return order;
+    }
+
+    private String resolvePaymentTimeoutType(Integer type) {
+        return type != null && type == 0
+                ? TimeoutMessage.ORDER_DEPOSIT_PAYMENT
+                : TimeoutMessage.ORDER_FINAL_PAYMENT;
     }
 
     @Override

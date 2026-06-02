@@ -344,7 +344,7 @@ redis-cli -p 6380 GET pool:detail:999999
 
 **目的：** 验证死信队列可以处理订单超时，不依赖主交易链路同步等待。
 
-测试前注意：当前 `timeout.delay.queue` 使用 per-message TTL。RabbitMQ 的 per-message TTL 会被队头长 TTL 消息阻塞；如果队列里已有大量 `POOL_START` 长延迟消息，5 秒测试消息可能不会及时过期。测试环境可先清空 `timeout.delay.queue` 再投递短 TTL 消息。
+测试前注意：订单押金、订单尾款、拼车开始、确认兜底已拆分为不同延迟队列，避免长 TTL 的拼车开始消息阻塞短 TTL 的订单超时测试消息。
 
 RabbitMQ 管理页：
 
@@ -357,27 +357,23 @@ guest / guest
 
 ```text
 timeout.delay.exchange
-timeout.delay.queue
+timeout.order.deposit.delay.queue
+timeout.order.final.delay.queue
+timeout.pool.start.delay.queue
+timeout.confirm.delay.queue
 timeout.dlx.exchange
 timeout.queue
-```
-
-测试环境清空延迟队列：
-
-```bash
-curl -u guest:guest -X DELETE \
-  http://localhost:15672/api/queues/%2F/timeout.delay.queue/contents
 ```
 
 手工投递测试消息：
 
 - Exchange：`timeout.delay.exchange`
-- Routing key：`timeout.delay.routing`
+- Routing key：`timeout.order.deposit.delay.routing`
 - Payload：
 
 ```json
 {
-  "type": "ORDER_PAYMENT",
+  "type": "ORDER_DEPOSIT_PAYMENT",
   "orderId": 1,
   "poolId": 1,
   "userId": 1

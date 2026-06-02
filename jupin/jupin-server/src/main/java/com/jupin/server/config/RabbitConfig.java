@@ -16,8 +16,14 @@ public class RabbitConfig {
     public static final String ROUTING_NOTIFICATION = "notification.routing";
 
     public static final String EXCHANGE_TIMEOUT_DELAY = "timeout.delay.exchange";
-    public static final String QUEUE_TIMEOUT_DELAY = "timeout.delay.queue";
-    public static final String ROUTING_TIMEOUT_DELAY = "timeout.delay.routing";
+    public static final String QUEUE_TIMEOUT_ORDER_DEPOSIT_DELAY = "timeout.order.deposit.delay.queue";
+    public static final String QUEUE_TIMEOUT_ORDER_FINAL_DELAY = "timeout.order.final.delay.queue";
+    public static final String QUEUE_TIMEOUT_POOL_START_DELAY = "timeout.pool.start.delay.queue";
+    public static final String QUEUE_TIMEOUT_CONFIRM_DELAY = "timeout.confirm.delay.queue";
+    public static final String ROUTING_TIMEOUT_ORDER_DEPOSIT_DELAY = "timeout.order.deposit.delay.routing";
+    public static final String ROUTING_TIMEOUT_ORDER_FINAL_DELAY = "timeout.order.final.delay.routing";
+    public static final String ROUTING_TIMEOUT_POOL_START_DELAY = "timeout.pool.start.delay.routing";
+    public static final String ROUTING_TIMEOUT_CONFIRM_DELAY = "timeout.confirm.delay.routing";
     public static final String EXCHANGE_TIMEOUT_DLX = "timeout.dlx.exchange";
     public static final String QUEUE_TIMEOUT = "timeout.queue";
     public static final String ROUTING_TIMEOUT = "timeout.routing";
@@ -63,8 +69,27 @@ public class RabbitConfig {
     }
 
     @Bean
-    public Queue timeoutDelayQueue() {
-        return QueueBuilder.durable(QUEUE_TIMEOUT_DELAY)
+    public Queue timeoutOrderDepositDelayQueue() {
+        return timeoutDelayQueue(QUEUE_TIMEOUT_ORDER_DEPOSIT_DELAY);
+    }
+
+    @Bean
+    public Queue timeoutOrderFinalDelayQueue() {
+        return timeoutDelayQueue(QUEUE_TIMEOUT_ORDER_FINAL_DELAY);
+    }
+
+    @Bean
+    public Queue timeoutPoolStartDelayQueue() {
+        return timeoutDelayQueue(QUEUE_TIMEOUT_POOL_START_DELAY);
+    }
+
+    @Bean
+    public Queue timeoutConfirmDelayQueue() {
+        return timeoutDelayQueue(QUEUE_TIMEOUT_CONFIRM_DELAY);
+    }
+
+    private Queue timeoutDelayQueue(String queueName) {
+        return QueueBuilder.durable(queueName)
                 .deadLetterExchange(EXCHANGE_TIMEOUT_DLX)
                 .deadLetterRoutingKey(ROUTING_TIMEOUT)
                 .build();
@@ -76,8 +101,31 @@ public class RabbitConfig {
     }
 
     @Bean
-    public Binding timeoutDelayBinding() {
-        return BindingBuilder.bind(timeoutDelayQueue()).to(timeoutDelayExchange()).with(ROUTING_TIMEOUT_DELAY);
+    public Binding timeoutOrderDepositDelayBinding() {
+        return BindingBuilder.bind(timeoutOrderDepositDelayQueue())
+                .to(timeoutDelayExchange())
+                .with(ROUTING_TIMEOUT_ORDER_DEPOSIT_DELAY);
+    }
+
+    @Bean
+    public Binding timeoutOrderFinalDelayBinding() {
+        return BindingBuilder.bind(timeoutOrderFinalDelayQueue())
+                .to(timeoutDelayExchange())
+                .with(ROUTING_TIMEOUT_ORDER_FINAL_DELAY);
+    }
+
+    @Bean
+    public Binding timeoutPoolStartDelayBinding() {
+        return BindingBuilder.bind(timeoutPoolStartDelayQueue())
+                .to(timeoutDelayExchange())
+                .with(ROUTING_TIMEOUT_POOL_START_DELAY);
+    }
+
+    @Bean
+    public Binding timeoutConfirmDelayBinding() {
+        return BindingBuilder.bind(timeoutConfirmDelayQueue())
+                .to(timeoutDelayExchange())
+                .with(ROUTING_TIMEOUT_CONFIRM_DELAY);
     }
 
     @Bean
