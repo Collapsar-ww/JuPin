@@ -225,6 +225,181 @@ GET {{baseUrl}}/api/player/order/my?page=1&size=10
 Authorization: Bearer {{playerToken}}
 ```
 
+### 4.11 订单创建幂等测试
+
+**目的：** 验证前端重复点击、网络重试时不会创建多条订单。
+
+第一次请求：
+
+```http
+POST {{baseUrl}}/api/player/order/create
+Authorization: Bearer {{playerToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "poolId": "{{poolId}}",
+  "type": 0,
+  "idempotentKey": "player-{{poolId}}-deposit-test"
+}
+```
+
+第二次请求：完全复用同一个 body，再请求一次。
+
+验收点：
+
+- 两次响应 `code` 都是 `200`
+- 两次响应的 `data.orderNo` 相同
+- 两次响应的 `data.idempotentKey` 相同
+- 数据库 `order` 表中同一 `user_id + idempotent_key` 只有一条记录
+
+数据库验证：
+
+```sql
+SELECT user_id, idempotent_key, COUNT(*)
+FROM `order`
+WHERE idempotent_key = 'player-{{poolId}}-deposit-test'
+GROUP BY user_id, idempotent_key;
+```
+
+### 4.12 重复支付幂等测试
+
+**目的：** 验证同一个订单重复支付时不会重复占座或重复改状态。
+
+连续请求两次：
+
+```http
+POST {{baseUrl}}/api/player/order/pay/{{orderNo}}
+Authorization: Bearer {{playerToken}}
+```
+
+验收点：
+
+- 两次响应 `code` 都是 `200`
+- 订单状态保持 `status=1(已支付)`
+- `pool_member.status` 从 `1(待支付)` 变为 `2(已加入)`
+- `car_pool.current_members` 等于正式成员数，而不是简单自增后的漂移值
+
+数据库验证：
+
+```sql
+SELECT status, pay_time, pay_request_no
+FROM `order`
+WHERE order_no = '{{orderNo}}';
+
+SELECT status
+FROM pool_member
+WHERE pool_id = {{poolId}} AND user_id = {{playerUserId}};
+
+SELECT current_members
+FROM car_pool
+WHERE id = {{poolId}};
+
+SELECT COUNT(*) AS joined_count
+FROM pool_member
+WHERE pool_id = {{poolId}} AND status = 2;
+```
+
+### 4.13 拼车详情缓存测试
+
+**目的：** 验证拼车详情接口使用 Redis Cache Aside，并且写操作后删除缓存。
+
+第一次请求：
+
+```http
+GET {{baseUrl}}/api/player/pool/{{poolId}}
+Authorization: Bearer {{playerToken}}
+```
+
+Redis 验证：
+
+```bash
+redis-cli -p 6380 GET pool:detail:{{poolId}}
+```
+
+验收点：
+
+- 第一次查询后 Redis 中存在 `pool:detail:{{poolId}}`
+- 再次查询详情时接口仍正常返回
+- 执行支付、加入、退出、取消、确认、改价等写操作后，`pool:detail:{{poolId}}` 会被删除
+
+空值缓存测试：
+
+```http
+GET {{baseUrl}}/api/player/pool/999999
+Authorization: Bearer {{playerToken}}
+```
+
+```bash
+redis-cli -p 6380 GET pool:detail:999999
+```
+
+验收点：
+
+- 接口返回“拼车不存在”
+- Redis 写入短 TTL 空值：`__NULL__`
+
+### 4.14 RabbitMQ 订单超时测试
+
+**目的：** 验证死信队列可以处理订单超时，不依赖主交易链路同步等待。
+
+RabbitMQ 管理页：
+
+```text
+http://localhost:15672
+guest / guest
+```
+
+确认存在：
+
+```text
+timeout.delay.exchange
+timeout.delay.queue
+timeout.dlx.exchange
+timeout.queue
+```
+
+手工投递测试消息：
+
+- Exchange：`timeout.delay.exchange`
+- Routing key：`timeout.delay.routing`
+- Payload：
+
+```json
+{
+  "type": "ORDER_PAYMENT",
+  "orderId": 1,
+  "poolId": 1,
+  "userId": 1
+}
+```
+
+Properties 设置：
+
+```text
+expiration = 5000
+```
+
+验收点：
+
+- 5 秒后消息进入死信消费队列并被消费
+- 如果订单仍是 `status=0(待支付)`，会被标记为 `status=4(逾期)`
+- 押金单逾期时，成员待支付状态回退为退出
+- 尾款单逾期时，用户信用分扣 10
+
+数据库验证：
+
+```sql
+SELECT id, type, status, expire_time
+FROM `order`
+WHERE id = 1;
+
+SELECT id, user_id, credit_score
+FROM `user`
+WHERE id = 1;
+```
+
 ## 5. 店家端最小测试顺序
 
 ### 5.1 注册店家账号

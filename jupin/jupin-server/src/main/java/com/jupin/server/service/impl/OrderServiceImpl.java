@@ -131,6 +131,7 @@ public class OrderServiceImpl implements OrderService {
         Order order = orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, orderNo));
         if (order == null) throw new BaseException(ErrorConstant.ORDER_NOT_FOUND);
         if (!order.getUserId().equals(userId)) throw new BaseException(ErrorConstant.ORDER_NOT_OWNED);
+        if (order.getStatus() == OrderStatus.PAID) return;
         if (order.getStatus() != OrderStatus.PENDING) throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
         if (order.getType() != null && order.getType() == 0) {
             payDeposit(order);
