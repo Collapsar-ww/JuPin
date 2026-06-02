@@ -303,7 +303,7 @@ WHERE pool_id = {{poolId}} AND status = 2;
 
 ### 4.13 拼车详情缓存测试
 
-**目的：** 验证拼车详情接口使用 Redis Cache Aside，并且写操作后删除缓存。
+**目的：** 验证拼车详情接口使用 Redis Cache Aside，热点详情缓存依赖写后主动失效，并通过布隆过滤器拦截不存在 ID。
 
 第一次请求：
 
@@ -324,7 +324,7 @@ redis-cli -p 6380 GET pool:detail:{{poolId}}
 - 再次查询详情时接口仍正常返回
 - 执行支付、加入、退出、取消、确认、改价等写操作后，`pool:detail:{{poolId}}` 会被删除
 
-空值缓存测试：
+布隆过滤器穿透测试：
 
 ```http
 GET {{baseUrl}}/api/player/pool/999999
@@ -333,12 +333,14 @@ Authorization: Bearer {{playerToken}}
 
 ```bash
 redis-cli -p 6380 GET pool:detail:999999
+redis-cli -p 6380 EXISTS pool:detail:bloom
 ```
 
 验收点：
 
 - 接口返回“拼车不存在”
-- Redis 写入短 TTL 空值：`__NULL__`
+- Redis 不写入 `pool:detail:999999` 空值缓存
+- Redis 中存在布隆过滤器 key：`pool:detail:bloom`
 
 ### 4.14 RabbitMQ 订单超时测试
 
