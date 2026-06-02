@@ -80,6 +80,84 @@
 | `sql/init.sql` / `jupin/sql/init.sql` | 增加订单幂等字段和索引 |
 | `剧本杀拼车系统_项目文档.md` | 写入 v3.0 技术方案 |
 
+### 本轮操作：接口测试执行与拼车创建链路修复
+
+#### 1. 问题现象
+
+按 `API_TEST_GUIDE.md` 中 4.11-4.14 的接口测试流程执行时，前置步骤“创建玩家局”返回：
+
+```json
+{
+  "code": 500,
+  "message": "服务器内部错误",
+  "data": null
+}
+```
+
+该问题导致订单幂等、重复支付、缓存和 RabbitMQ 超时测试无法继续执行。
+
+#### 2. 排查过程
+
+| 检查项 | 结果 |
+|--------|------|
+| 后端端口 | 确认当前 `8080` 返回 `JuPin API` |
+| 注册玩家 | 成功 |
+| `GET /api/player/user/me` | 成功，说明 token 和 `BaseContext` 正常 |
+| 剧本数据 | `script.id=1` 存在且上架 |
+| 用户信用分 | 新注册玩家 `credit_score=100` |
+| RabbitMQ 交换机/队列 | `timeout.delay.exchange`、`timeout.delay.queue`、`timeout.dlx.exchange`、`timeout.queue` 均存在，绑定关系正确 |
+
+#### 3. 根因判断
+
+排查过程中发现两类问题：
+
+1. 创建拼车主流程末尾会调用 `sendPoolStartTimeout(pool)` 投递拼车开始超时消息。该 MQ 投递属于补偿任务，不应影响拼车创建主交易链路。如果 RabbitMQ 投递阶段出现异常，原实现会让异常继续向外抛出，导致创建拼车接口返回 500，违背“超时任务从主交易链路解耦”的设计目标。
+2. `CarPool.roles` 是 `String`，而 `PoolVO.roles` 是 `List<RoleStatusVO>`。`VOConverter.toPoolVO()` 使用 `BeanUtil.copyProperties(pool, PoolVO.class)` 时会尝试把字符串 `roles` 转换为列表字段，导致创建拼车返回 VO 和查询拼车详情时出现 500。
+
+#### 4. 修复内容
+
+1. 修改 `PoolServiceImpl.sendPoolStartTimeout()`：
+
+- 对 `timeoutProducer.send(...)` 增加 `try/catch`
+- 投递失败时记录 warning 日志
+- 不再阻断拼车创建主流程
+
+2. 修改 `VOConverter.toPoolVO()`：
+
+- `BeanUtil.copyProperties(pool, PoolVO.class, "roles")`
+- 忽略实体中的 `roles` 字符串字段，避免自动转换到 `PoolVO.roles`
+- 角色状态继续通过 `/api/player/pool/{poolId}/roles` 接口返回
+
+```text
+拼车创建成功是主链路结果；
+超时消息投递失败是补偿链路问题，只记录日志，后续可由定时扫描或人工补偿兜底。
+```
+
+#### 5. 接口测试结果
+
+按 `API_TEST_GUIDE.md` 4.11-4.14 执行测试：
+
+| 测试项 | 结果 | 说明 |
+|--------|------|------|
+| 4.11 订单创建幂等 | 通过 | 同一 `idempotentKey` 两次创建返回相同 `orderNo` |
+| 4.12 重复支付幂等 | 通过 | 同一订单连续支付两次均返回成功，订单保持 `PAID` |
+| 4.13 拼车详情缓存 | 通过 | 首次详情查询写入 `pool:detail:{poolId}`；支付后缓存被删除 |
+| 4.14 RabbitMQ 订单超时 | 通过 | 清空测试环境延迟队列后，5 秒 TTL 消息进入死信队列并被消费，订单变为 `OVERDUE`，成员变为 `LEFT` |
+
+测试产物示例：
+
+```text
+PASS RabbitMQ timeout retest
+order.status=4
+pool_member.status=3
+```
+
+#### 6. RabbitMQ 测试注意事项
+
+当前 `timeout.delay.queue` 使用 per-message TTL。RabbitMQ 的 per-message TTL 存在队头阻塞特性：如果队头是一个长 TTL 的 `POOL_START` 消息，排在后面的 5 秒测试消息不会及时过期。
+
+因此在测试环境手工验证 5 秒超时时，需要先清空 `timeout.delay.queue`，再投递短 TTL 测试消息。生产优化方向是拆分不同业务类型/不同延迟级别的延迟队列，或引入 RabbitMQ delayed message exchange 插件。
+
 ## 日期：2026-05-20
 
 ### 项目进度

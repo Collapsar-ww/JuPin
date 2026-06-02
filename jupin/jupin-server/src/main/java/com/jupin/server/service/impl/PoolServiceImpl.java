@@ -750,7 +750,11 @@ public class PoolServiceImpl implements PoolService {
     private void sendPoolStartTimeout(CarPool pool) {
         if (pool.getStartTime() == null) return;
         long delayMillis = Duration.between(LocalDateTime.now(), pool.getStartTime()).toMillis();
-        timeoutProducer.send(new TimeoutMessage(TimeoutMessage.POOL_START, null, pool.getId(), null), delayMillis);
+        try {
+            timeoutProducer.send(new TimeoutMessage(TimeoutMessage.POOL_START, null, pool.getId(), null), delayMillis);
+        } catch (Exception e) {
+            log.warn("send pool start timeout message failed, poolId={}", pool.getId(), e);
+        }
     }
 
     private void evictPoolDetail(Long poolId) {

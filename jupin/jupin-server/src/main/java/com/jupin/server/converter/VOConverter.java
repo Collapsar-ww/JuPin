@@ -24,7 +24,7 @@ public class VOConverter {
     private final OrderMapper orderMapper;
 
     public PoolVO toPoolVO(CarPool pool) {
-        PoolVO vo = BeanUtil.copyProperties(pool, PoolVO.class);
+        PoolVO vo = BeanUtil.copyProperties(pool, PoolVO.class, "roles");
         User owner = userMapper.selectById(pool.getOwnerId());
         if (owner != null) {
             vo.setOwnerNickname(owner.getNickname());
