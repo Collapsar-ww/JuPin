@@ -255,6 +255,15 @@ public class OrderServiceImpl implements OrderService {
                 throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
             }
 
+            int seatUpdated = poolMapper.update(null, new UpdateWrapper<CarPool>()
+                    .setSql("current_members = current_members + 1")
+                    .eq(DbFieldConstant.ID, pool.getId())
+                    .in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL)
+                    .apply("current_members < max_members"));
+            if (seatUpdated == 0) {
+                throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
+            }
+
             markPaid(latest);
 
             int updated = memberMapper.update(null, new UpdateWrapper<PoolMember>()
@@ -266,8 +275,9 @@ public class OrderServiceImpl implements OrderService {
             Long joinedCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
                     .eq(DbFieldConstant.POOL_ID, pool.getId())
                     .eq(DbFieldConstant.STATUS, MemberStatus.JOINED));
-            pool.setCurrentMembers(joinedCount.intValue());
-            poolMapper.updateById(pool);
+            poolMapper.update(null, new UpdateWrapper<CarPool>()
+                    .set("current_members", joinedCount.intValue())
+                    .eq(DbFieldConstant.ID, pool.getId()));
             stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + pool.getId());
             if (joinedCount.equals(pool.getMaxMembers().longValue())) {
                 int rows = poolMapper.update(null, new UpdateWrapper<CarPool>()

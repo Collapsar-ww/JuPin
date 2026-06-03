@@ -2,6 +2,26 @@
 
 ## 日期：2026-06-02
 
+### 本轮操作：补充支付占座 MySQL 原子名额兜底并重构面试文档
+
+#### 1. 实现内容
+
+- `OrderServiceImpl.payDeposit()` 在 Redisson 锁内增加 MySQL 原子名额更新：
+  - `current_members = current_members + 1`
+  - 条件包含 `current_members < max_members`
+  - 更新失败时直接按拼车已满处理，事务回滚。
+- 保留订单 `PENDING -> PAID`、成员 `PENDING_PAYMENT -> JOINED` 条件更新。
+- 保留支付成功后按正式成员数反算 `current_members`，避免简单自增造成计数漂移。
+
+#### 2. 设计目的
+
+- Redisson 分布式锁负责串行化同一拼车下的支付占座请求。
+- MySQL 条件更新作为数据库最终兜底，降低锁异常、重复请求或并发竞争导致超员的风险。
+
+#### 3. 文档
+
+- 重构 `面试.md`，将 Redis 缓存、RabbitMQ 超时、超时通知、支付占座并发控制等内容更新为当前升级后的实现口径。
+
 ### 本轮操作：升级拼车详情缓存防护
 
 #### 1. 实现内容
