@@ -24,7 +24,27 @@ public class VOConverter {
     private final OrderMapper orderMapper;
 
     public PoolVO toPoolVO(CarPool pool) {
-        PoolVO vo = BeanUtil.copyProperties(pool, PoolVO.class, "roles");
+        PoolVO vo = new PoolVO();
+        vo.setId(pool.getId());
+        vo.setType(pool.getType());
+        vo.setOwnerId(pool.getOwnerId());
+        vo.setShopId(pool.getShopId());
+        vo.setScriptId(pool.getScriptId());
+        vo.setScriptName(pool.getScriptName());
+        vo.setScriptType(pool.getScriptType());
+        vo.setCity(pool.getCity());
+        vo.setAddress(pool.getAddress());
+        vo.setStartTime(pool.getStartTime());
+        vo.setEndTime(pool.getEndTime());
+        vo.setMaxMembers(pool.getMaxMembers());
+        vo.setCurrentMembers(pool.getCurrentMembers());
+        vo.setPrice(pool.getPrice());
+        vo.setDeposit(pool.getDeposit());
+        vo.setDmId(pool.getDmId());
+        vo.setJoinType(pool.getJoinType());
+        vo.setStatus(pool.getStatus());
+        vo.setCreateTime(pool.getCreateTime());
+        vo.setRecommendScore(pool.getRecommendScore());
         User owner = userMapper.selectById(pool.getOwnerId());
         if (owner != null) {
             vo.setOwnerNickname(owner.getNickname());

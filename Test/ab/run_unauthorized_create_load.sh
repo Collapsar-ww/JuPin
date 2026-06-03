@@ -6,17 +6,19 @@ source "$SCRIPT_DIR/common.sh"
 
 REQUESTS="${REQUESTS:-300}"
 CONCURRENCY="${CONCURRENCY:-30}"
-SCENARIO="read"
+SCENARIO="unauthorized_create"
 RAW_FILE="$RESULTS_DIR/${RUN_ID}_${LABEL}_${SCENARIO}_raw.tsv"
 SUMMARY_FILE="$RESULTS_DIR/${RUN_ID}_${LABEL}_${SCENARIO}_summary.tsv"
+
+body=$(jq -n --argjson poolId "$POOL_ID" --argjson type "$ORDER_TYPE" \
+  '{poolId:$poolId,type:$type,idempotentKey:"unauthorized-direct-load"}')
 
 : > "$RAW_FILE"
 started_at=$(date +%s)
 running=0
 for i in $(seq 1 "$REQUESTS"); do
   (
-    curl -sS -o /dev/null -w "%{time_total}\t%{http_code}\n" \
-      "$BASE_URL/api/player/pool/$POOL_ID"
+    post_json_status "/api/player/order/create" "$body"
   ) >> "$RAW_FILE" &
 
   running=$((running + 1))
@@ -28,11 +30,12 @@ done
 wait
 ended_at=$(date +%s)
 
-write_summary "$RAW_FILE" "$SUMMARY_FILE" "$SCENARIO" "$REQUESTS" "$CONCURRENCY" "$started_at" "$ended_at"
+write_summary "$RAW_FILE" "$SUMMARY_FILE" "$SCENARIO" "$REQUESTS" "$CONCURRENCY" "$started_at" "$ended_at" \
+  '$2 != 200 {count++} END {print count + 0}'
 
 total=$(wc -l < "$RAW_FILE" | tr -d ' ')
-http_200=$(awk '$2 == 200 {count++} END {print count + 0}' "$RAW_FILE")
-if [[ "$http_200" != "$total" ]]; then
-  echo "Read load failed: HTTP 200 count does not match total requests." >&2
+blocked=$(awk '$2 != 200 {count++} END {print count + 0}' "$RAW_FILE")
+if [[ "$blocked" != "$total" ]]; then
+  echo "Unauthorized create load failed: some requests returned HTTP 200." >&2
   exit 1
 fi

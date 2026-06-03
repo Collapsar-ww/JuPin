@@ -19,7 +19,6 @@ import com.jupin.server.service.CreditService;
 import com.jupin.server.service.PoolService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -28,7 +27,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.DayOfWeek;
@@ -67,22 +65,9 @@ public class PoolServiceImpl implements PoolService {
     private static final int SCORE_PRICE = 15;
     private static final int SCORE_MEMBER_COUNT = 10;
     private static final int MAX_RECOMMEND_FETCH = 500;
-    private static final long POOL_DETAIL_BLOOM_EXPECTED_INSERTIONS = 100_000L;
-    private static final double POOL_DETAIL_BLOOM_FALSE_PROBABILITY = 0.01D;
+    private static final long POOL_DETAIL_TTL_MINUTES = 10;
+    private static final long POOL_DETAIL_NULL_TTL_SECONDS = 60;
     private static final long CONFIRM_TIMEOUT_HOURS = 2;
-
-    @PostConstruct
-    public void initPoolDetailBloom() {
-        RBloomFilter<Long> bloomFilter = getPoolDetailBloomFilter();
-        bloomFilter.tryInit(POOL_DETAIL_BLOOM_EXPECTED_INSERTIONS, POOL_DETAIL_BLOOM_FALSE_PROBABILITY);
-        List<Object> ids = poolMapper.selectObjs(new QueryWrapper<CarPool>().select(DbFieldConstant.ID));
-        for (Object id : ids) {
-            if (id instanceof Number) {
-                bloomFilter.add(((Number) id).longValue());
-            }
-        }
-        log.info("pool detail bloom initialized, loaded={}", ids.size());
-    }
 
     @Override
     @Transactional
@@ -137,7 +122,6 @@ public class PoolServiceImpl implements PoolService {
                 .status(PoolStatus.OPEN)
                 .build();
         poolMapper.insert(pool);
-        getPoolDetailBloomFilter().add(pool.getId());
 
         if (type == 0) {
             PoolMember ownerMember = PoolMember.builder()
@@ -155,20 +139,22 @@ public class PoolServiceImpl implements PoolService {
 
     @Override
     public CarPool getDetail(Long poolId) {
-        if (!mightContainPool(poolId)) {
-            throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
-        }
         String cacheKey = RedisKeyConstant.POOL_DETAIL_PREFIX + poolId;
         String cached = stringRedis.opsForValue().get(cacheKey);
+        if (RedisKeyConstant.CACHE_NULL.equals(cached)) {
+            throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        }
         if (StringUtils.hasText(cached)) {
             return JSONUtil.toBean(cached, CarPool.class);
         }
 
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null) {
+            stringRedis.opsForValue().set(cacheKey, RedisKeyConstant.CACHE_NULL, POOL_DETAIL_NULL_TTL_SECONDS, TimeUnit.SECONDS);
             throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         }
-        stringRedis.opsForValue().set(cacheKey, JSONUtil.toJsonStr(pool));
+        stringRedis.opsForValue().set(cacheKey, JSONUtil.toJsonStr(pool),
+                POOL_DETAIL_TTL_MINUTES * 60 + new Random().nextInt(120), TimeUnit.SECONDS);
         return pool;
     }
 
@@ -775,11 +761,4 @@ public class PoolServiceImpl implements PoolService {
         stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + poolId);
     }
 
-    private boolean mightContainPool(Long poolId) {
-        return poolId != null && getPoolDetailBloomFilter().contains(poolId);
-    }
-
-    private RBloomFilter<Long> getPoolDetailBloomFilter() {
-        return redisson.getBloomFilter(RedisKeyConstant.POOL_DETAIL_BLOOM_KEY);
-    }
 }

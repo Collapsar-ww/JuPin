@@ -1,8 +1,8 @@
-# 严格 A/B 读链路压测流程
+# 严格 A/B 场景压测流程
 
 ## 目标
 
-用同机、同数据、同参数的方式对比拼车详情读链路优化前后表现，避免缓存预热、脏数据、写入副作用和运行顺序影响结论。
+用同机、同数据、同参数的方式对比关键优化前后表现，避免缓存预热、脏数据、写入副作用和运行顺序影响结论。
 
 ## A/B 定义
 
@@ -18,7 +18,7 @@
 - 每个版本至少跑 3 轮，取中位数，避免单轮抖动误判。
 - A/B 都在同一台机器、同一套 Docker 中间件、同一套测试数据下执行。
 
-## 单轮状态重置
+## 单场景状态重置
 
 ```bash
 bash Test/ab/reset_state.sh
@@ -26,38 +26,40 @@ bash Test/ab/reset_state.sh
 
 这个脚本会重新导入 `jupin/sql/init.sql` 和 `seed-data.sql`，并执行 Redis `FLUSHDB`。
 
-## 读链路采样
+## 完整场景集采样
 
 ```bash
-LABEL=A_round1 \
+LABEL_PREFIX=A_round1 \
 BASE_URL=http://localhost:8080 \
 POOL_ID=1 \
-REQUESTS=300 \
-CONCURRENCY=30 \
-bash Test/ab/run_read_load.sh
+TIERS=100:10,300:30,500:50 \
+bash Test/ab/run_full_suite.sh
 ```
 
-B 版本只需要替换 `LABEL`：
+B 版本只需要替换 `LABEL_PREFIX`：
 
 ```bash
-LABEL=B_round1 \
+LABEL_PREFIX=B_round1 \
 BASE_URL=http://localhost:8080 \
 POOL_ID=1 \
-REQUESTS=300 \
-CONCURRENCY=30 \
-bash Test/ab/run_read_load.sh
+TIERS=100:10,300:30,500:50 \
+bash Test/ab/run_full_suite.sh
 ```
 
 ## 结果位置
 
 结果写入 `Test/results`：
 
-- `${RUN_ID}_${LABEL}_read_raw.tsv`：每个请求的耗时和 HTTP 状态码。
-- `${RUN_ID}_${LABEL}_read_summary.tsv`：本轮汇总指标。
+- `${RUN_ID}_${LABEL}_${SCENARIO}_raw.tsv`：每个请求的耗时、HTTP 状态码和业务结果。
+- `${RUN_ID}_${LABEL}_${SCENARIO}_summary.tsv`：本轮汇总指标。
+- `${RUN_ID}_${LABEL_PREFIX}_suite_status.tsv`：整轮场景执行状态。
+- `${RUN_ID}_${LABEL}_consistency.tsv`：该场景后的业务一致性 SQL 校验结果。
+- `${RUN_ID}_${LABEL}_reliability.tsv`：该场景后的 MQ/支付事件可靠性 SQL 校验结果。
 
 汇总指标包括：
 
 - `http_200`
+- `business_ok`
 - `avg_seconds`
 - `p50_seconds`
 - `p95_seconds`
@@ -68,9 +70,11 @@ bash Test/ab/run_read_load.sh
 ## 验收口径
 
 - `http_200` 必须等于 `requests`。
-- 主要比较 `p95_seconds`。
-- 辅助比较 `p99_seconds` 和 `throughput_req_s`。
-- 如果任一轮出现非 200，先修正确性问题，不参与性能结论。
+- 业务成功场景的 `business_ok` 必须等于 `requests`。
+- 无 Token 直打场景的 `business_ok` 表示“被拦截数量”，也必须等于 `requests`。
+- SQL/MQ 校验异常计数应为 `0`。
+- 读链路优化主要比较 `read` 场景的 `p95_seconds`、`p99_seconds`、`throughput_req_s`。
+- 订单/支付/回调优化主要比较对应场景的 `business_ok` 和 SQL/MQ 异常数。
 
 ## 建议执行顺序
 
