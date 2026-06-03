@@ -5,6 +5,7 @@ public class DbFieldConstant {
     public static final String CREATE_TIME = "create_time";
     public static final String FROM_USER_ID = "from_user_id";
     public static final String ID = "id";
+    public static final String EVENT_KEY = "event_key";
     public static final String IS_READ = "is_read";
     public static final String ORDER_NO = "order_no";
     public static final String PAYEE_ID = "payee_id";

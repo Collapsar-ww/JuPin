@@ -3,6 +3,7 @@ package com.jupin.server.controller.player;
 import cn.hutool.core.bean.BeanUtil;
 import com.jupin.common.context.BaseContext;
 import com.jupin.common.result.Result;
+import com.jupin.pojo.dto.MockPayCallbackRequest;
 import com.jupin.pojo.dto.OrderCreateRequest;
 import com.jupin.pojo.entity.Order;
 import com.jupin.pojo.vo.OrderVO;
@@ -38,6 +39,13 @@ public class PlayerOrderController {
         return Result.success();
     }
 
+    @Operation(summary = "Mock 支付回调  🔒")
+    @PostMapping("/mock-callback")
+    public Result<OrderVO> mockCallback(@Valid @RequestBody MockPayCallbackRequest request) {
+        Order order = orderService.mockPayCallback(BaseContext.getCurrentId(), request);
+        return Result.success(BeanUtil.copyProperties(order, OrderVO.class));
+    }
+
     @Operation(summary = "我的订单  🔒")
     @GetMapping("/my")
     public Result<List<OrderVO>> myOrders(
@@ -50,4 +58,3 @@ public class PlayerOrderController {
         return Result.success(vos);
     }
 }
-

@@ -2,6 +2,7 @@ package com.jupin.server.service.impl;
 
 import cn.hutool.core.lang.Snowflake;
 import cn.hutool.core.util.IdUtil;
+import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -9,13 +10,17 @@ import com.jupin.common.constant.DbFieldConstant;
 import com.jupin.common.constant.ErrorConstant;
 import com.jupin.common.constant.MemberStatus;
 import com.jupin.common.constant.OrderStatus;
+import com.jupin.common.constant.PaymentEventStatus;
 import com.jupin.common.constant.PoolStatus;
 import com.jupin.common.constant.RedisKeyConstant;
 import com.jupin.common.exception.BaseException;
+import com.jupin.pojo.dto.MockPayCallbackRequest;
 import com.jupin.pojo.entity.CarPool;
 import com.jupin.pojo.entity.Order;
+import com.jupin.pojo.entity.PaymentEvent;
 import com.jupin.pojo.entity.PoolMember;
 import com.jupin.server.mapper.OrderMapper;
+import com.jupin.server.mapper.PaymentEventMapper;
 import com.jupin.server.mapper.PoolMemberMapper;
 import com.jupin.server.mapper.PoolMapper;
 import com.jupin.server.mq.TimeoutMessage;
@@ -40,14 +45,18 @@ import java.util.concurrent.TimeUnit;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderMapper orderMapper;
+    private final PaymentEventMapper paymentEventMapper;
     private final PoolMapper poolMapper;
     private final PoolMemberMapper memberMapper;
+    private final OrderStateMachine orderStateMachine;
     private final RedissonClient redisson;
     private final StringRedisTemplate stringRedis;
     private final TimeoutProducer timeoutProducer;
     private final Snowflake snowflake = IdUtil.getSnowflake(1, 1);
     private static final long DEPOSIT_PAY_TIMEOUT_MINUTES = 15;
     private static final long FINAL_PAY_TIMEOUT_HOURS = 24;
+    private static final String PAY_STATUS_SUCCESS = "SUCCESS";
+    private static final String EVENT_TYPE_PAY_CALLBACK = "PAY_CALLBACK";
 
     @Override
     @Transactional
@@ -139,11 +148,62 @@ public class OrderServiceImpl implements OrderService {
         if (!order.getUserId().equals(userId)) throw new BaseException(ErrorConstant.ORDER_NOT_OWNED);
         if (order.getStatus() == OrderStatus.PAID) return;
         if (order.getStatus() != OrderStatus.PENDING) throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
-        if (order.getType() != null && order.getType() == 0) {
-            payDeposit(order);
-            return;
+
+        String payRequestNo = StringUtils.hasText(order.getPayRequestNo())
+                ? order.getPayRequestNo()
+                : "PAY-" + snowflake.nextIdStr();
+        MockPayCallbackRequest callback = new MockPayCallbackRequest();
+        callback.setOrderNo(orderNo);
+        callback.setPayRequestNo(payRequestNo);
+        callback.setCallbackRequestNo("CALLBACK-" + payRequestNo);
+        callback.setChannelTxnId("MOCK-" + payRequestNo);
+        callback.setPayStatus(PAY_STATUS_SUCCESS);
+        mockPayCallback(userId, callback);
+    }
+
+    @Override
+    @Transactional
+    public Order mockPayCallback(Long userId, MockPayCallbackRequest request) {
+        if (!StringUtils.hasText(request.getPayRequestNo())) {
+            request.setPayRequestNo("PAY-" + request.getCallbackRequestNo());
         }
-        markPaid(order);
+        if (!StringUtils.hasText(request.getPayStatus())) {
+            request.setPayStatus(PAY_STATUS_SUCCESS);
+        }
+        Order order = orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, request.getOrderNo()));
+        if (order == null) throw new BaseException(ErrorConstant.ORDER_NOT_FOUND);
+        if (userId != null && !order.getUserId().equals(userId)) throw new BaseException(ErrorConstant.ORDER_NOT_OWNED);
+
+        String eventKey = "callback:" + request.getChannelTxnId();
+        PaymentEvent event = insertPaymentEvent(eventKey, request);
+        if (event.getStatus() != null && event.getStatus() != PaymentEventStatus.PROCESSING) {
+            return orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, request.getOrderNo()));
+        }
+
+        if (!PAY_STATUS_SUCCESS.equalsIgnoreCase(request.getPayStatus())) {
+            updatePaymentEventStatus(event.getId(), PaymentEventStatus.IGNORED);
+            return order;
+        }
+        if (order.getStatus() == OrderStatus.PAID) {
+            updatePaymentEventStatus(event.getId(), PaymentEventStatus.SUCCESS);
+            return order;
+        }
+        if (order.getStatus() != OrderStatus.PENDING) {
+            updatePaymentEventStatus(event.getId(), PaymentEventStatus.IGNORED);
+            return order;
+        }
+
+        if (order.getType() != null && order.getType() == 0) {
+            payDeposit(order, request);
+        } else {
+            boolean paid = orderStateMachine.paySuccess(order, request.getPayRequestNo(), request.getCallbackRequestNo(), request.getChannelTxnId());
+            if (!paid) {
+                updatePaymentEventStatus(event.getId(), PaymentEventStatus.IGNORED);
+                return orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, request.getOrderNo()));
+            }
+        }
+        updatePaymentEventStatus(event.getId(), PaymentEventStatus.SUCCESS);
+        return orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, request.getOrderNo()));
     }
 
     @Override
@@ -151,10 +211,7 @@ public class OrderServiceImpl implements OrderService {
     public void refund(String orderNo) {
         Order order = orderMapper.selectOne(new QueryWrapper<Order>().eq(DbFieldConstant.ORDER_NO, orderNo));
         if (order == null) throw new BaseException(ErrorConstant.ORDER_NOT_FOUND);
-        if (order.getStatus() != OrderStatus.PAID) throw new BaseException(ErrorConstant.ONLY_PAID_ORDER_CAN_REFUND);
-        order.setStatus(OrderStatus.REFUNDED);
-        order.setRefundTime(LocalDateTime.now());
-        orderMapper.updateById(order);
+        orderStateMachine.refund(order);
     }
 
     @Override
@@ -162,12 +219,7 @@ public class OrderServiceImpl implements OrderService {
     public void release(Long orderId) {
         Order order = orderMapper.selectById(orderId);
         if (order == null) throw new BaseException(ErrorConstant.ORDER_NOT_FOUND);
-        if (order.getStatus() != OrderStatus.PAID) throw new BaseException(ErrorConstant.ONLY_PAID_ORDER_CAN_RELEASE);
-        if (order.getReleaseStatus() == 1) return;
-
-        order.setReleaseStatus(1);
-        order.setReleaseTime(LocalDateTime.now());
-        orderMapper.updateById(order);
+        orderStateMachine.release(order);
     }
 
     @Override
@@ -208,21 +260,7 @@ public class OrderServiceImpl implements OrderService {
         return deposit;
     }
 
-    private void markPaid(Order order) {
-        int rows = orderMapper.update(null, new UpdateWrapper<Order>()
-                .set(DbFieldConstant.STATUS, OrderStatus.PAID)
-                .set("pay_time", LocalDateTime.now())
-                .set("pay_request_no", "MOCK-" + snowflake.nextIdStr())
-                .eq(DbFieldConstant.ID, order.getId())
-                .eq(DbFieldConstant.STATUS, OrderStatus.PENDING));
-        if (rows == 0) {
-            Order latest = orderMapper.selectById(order.getId());
-            if (latest != null && latest.getStatus() == OrderStatus.PAID) return;
-            throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
-        }
-    }
-
-    private void payDeposit(Order order) {
+    private void payDeposit(Order order, MockPayCallbackRequest callback) {
         String lockKey = RedisKeyConstant.POOL_LOCK_PREFIX + order.getPoolId();
         RLock lock = redisson.getLock(lockKey);
         try {
@@ -239,7 +277,8 @@ public class OrderServiceImpl implements OrderService {
                     .eq(DbFieldConstant.USER_ID, latest.getUserId()));
             if (member == null) throw new BaseException(ErrorConstant.POOL_MEMBER_NOT_FOUND);
             if (member.getStatus() == MemberStatus.JOINED) {
-                markPaid(latest);
+                boolean paid = orderStateMachine.paySuccess(latest, callback.getPayRequestNo(), callback.getCallbackRequestNo(), callback.getChannelTxnId());
+                if (!paid) throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
                 return;
             }
             if (member.getStatus() != MemberStatus.PENDING_PAYMENT) {
@@ -264,7 +303,8 @@ public class OrderServiceImpl implements OrderService {
                 throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
             }
 
-            markPaid(latest);
+            boolean paid = orderStateMachine.paySuccess(latest, callback.getPayRequestNo(), callback.getCallbackRequestNo(), callback.getChannelTxnId());
+            if (!paid) throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
 
             int updated = memberMapper.update(null, new UpdateWrapper<PoolMember>()
                     .set(DbFieldConstant.STATUS, MemberStatus.JOINED)
@@ -312,5 +352,41 @@ public class OrderServiceImpl implements OrderService {
         return type != null && type == 1
                 ? LocalDateTime.now().plusHours(FINAL_PAY_TIMEOUT_HOURS)
                 : LocalDateTime.now().plusMinutes(DEPOSIT_PAY_TIMEOUT_MINUTES);
+    }
+
+    private PaymentEvent insertPaymentEvent(String eventKey, MockPayCallbackRequest request) {
+        PaymentEvent event = PaymentEvent.builder()
+                .eventKey(eventKey)
+                .orderNo(request.getOrderNo())
+                .eventType(EVENT_TYPE_PAY_CALLBACK)
+                .requestNo(request.getCallbackRequestNo())
+                .channelTxnId(request.getChannelTxnId())
+                .status(PaymentEventStatus.PROCESSING)
+                .rawPayload(JSONUtil.toJsonStr(request))
+                .build();
+        try {
+            paymentEventMapper.insert(event);
+            return event;
+        } catch (DuplicateKeyException e) {
+            PaymentEvent existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
+                    .eq(DbFieldConstant.EVENT_KEY, eventKey)
+                    .last("LIMIT 1"));
+            if (existing != null) return existing;
+            existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
+                    .eq("channel_txn_id", request.getChannelTxnId())
+                    .last("LIMIT 1"));
+            if (existing != null) return existing;
+            existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
+                    .eq("request_no", request.getCallbackRequestNo())
+                    .last("LIMIT 1"));
+            if (existing != null) return existing;
+            throw e;
+        }
+    }
+
+    private void updatePaymentEventStatus(Long eventId, int status) {
+        paymentEventMapper.update(null, new UpdateWrapper<PaymentEvent>()
+                .set(DbFieldConstant.STATUS, status)
+                .eq(DbFieldConstant.ID, eventId));
     }
 }

@@ -13,6 +13,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS `credit_log`;
 DROP TABLE IF EXISTS `message`;
 DROP TABLE IF EXISTS `review`;
+DROP TABLE IF EXISTS `payment_event`;
 DROP TABLE IF EXISTS `order`;
 DROP TABLE IF EXISTS `pool_member`;
 DROP TABLE IF EXISTS `car_pool`;
@@ -194,6 +195,25 @@ CREATE TABLE `order` (
   CONSTRAINT `fk_order_user` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_order_pool` FOREIGN KEY (`pool_id`) REFERENCES `car_pool` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单表';
+
+CREATE TABLE `payment_event` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `event_key` VARCHAR(128) NOT NULL COMMENT '事件幂等键',
+  `order_no` VARCHAR(32) NOT NULL,
+  `event_type` VARCHAR(32) NOT NULL COMMENT 'PAY_CALLBACK/REFUND_CALLBACK',
+  `request_no` VARCHAR(64) DEFAULT NULL COMMENT '回调请求幂等号',
+  `channel_txn_id` VARCHAR(64) DEFAULT NULL COMMENT '渠道交易流水号',
+  `status` TINYINT DEFAULT 0 COMMENT '0-处理中 1-成功 2-已忽略',
+  `raw_payload` TEXT DEFAULT NULL,
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_event_key` (`event_key`),
+  UNIQUE KEY `uk_request_no` (`request_no`),
+  UNIQUE KEY `uk_payment_channel_txn` (`channel_txn_id`),
+  KEY `idx_order_no` (`order_no`),
+  KEY `idx_event_status` (`event_type`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='支付事件流水表';
 
 CREATE TABLE `review` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,

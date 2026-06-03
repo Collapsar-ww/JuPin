@@ -218,6 +218,8 @@ POST {{baseUrl}}/api/player/order/pay/{{orderNo}}
 Authorization: Bearer {{playerToken}}
 ```
 
+该接口会生成 Mock 支付请求号和渠道流水号，并走同一套 Mock 支付回调处理逻辑。
+
 ### 4.10 查询我的订单
 
 ```http
@@ -280,13 +282,19 @@ Authorization: Bearer {{playerToken}}
 - 订单状态保持 `status=1(已支付)`
 - `pool_member.status` 从 `1(待支付)` 变为 `2(已加入)`
 - `car_pool.current_members` 等于正式成员数，而不是简单自增后的漂移值
+- `payment_event` 中同一渠道流水只处理一次
 
 数据库验证：
 
 ```sql
-SELECT status, pay_time, pay_request_no
+SELECT status, pay_time, pay_request_no, callback_request_no, channel_txn_id
 FROM `order`
 WHERE order_no = '{{orderNo}}';
+
+SELECT event_key, order_no, event_type, request_no, channel_txn_id, status, COUNT(*) AS cnt
+FROM payment_event
+WHERE order_no = '{{orderNo}}'
+GROUP BY event_key, order_no, event_type, request_no, channel_txn_id, status;
 
 SELECT status
 FROM pool_member
@@ -300,6 +308,61 @@ SELECT COUNT(*) AS joined_count
 FROM pool_member
 WHERE pool_id = {{poolId}} AND status = 2;
 ```
+
+### 4.12.1 Mock 支付回调幂等测试
+
+**目的：** 验证重复支付回调、渠道流水重复、超时后回调不会重复改订单或重复占座。
+
+准备一个新的待支付订单后，手工调用 Mock 回调：
+
+```http
+POST {{baseUrl}}/api/player/order/mock-callback
+Authorization: Bearer {{playerToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "orderNo": "{{orderNo}}",
+  "payRequestNo": "pay-{{orderNo}}-001",
+  "callbackRequestNo": "callback-{{orderNo}}-001",
+  "channelTxnId": "mock-channel-{{orderNo}}-001",
+  "payStatus": "SUCCESS"
+}
+```
+
+重复提交完全相同的 body。
+
+验收点：
+
+- 两次响应 `code` 都是 `200`
+- 订单只从 `PENDING -> PAID` 一次
+- `payment_event` 中 `event_key = callback:mock-channel-{{orderNo}}-001` 只有一条
+- `pool_member.status` 只转为 `JOINED` 一次，`current_members` 与正式成员数一致
+
+数据库验证：
+
+```sql
+SELECT status, pay_request_no, callback_request_no, channel_txn_id
+FROM `order`
+WHERE order_no = '{{orderNo}}';
+
+SELECT event_key, request_no, channel_txn_id, status, COUNT(*) AS cnt
+FROM payment_event
+WHERE channel_txn_id = 'mock-channel-{{orderNo}}-001'
+GROUP BY event_key, request_no, channel_txn_id, status;
+```
+
+超时后回调测试：
+
+1. 准备一个新的待支付订单。
+2. 将订单置为逾期或等待 RabbitMQ 超时消费完成。
+3. 再用 `/api/player/order/mock-callback` 发送 `SUCCESS` 回调。
+
+验收点：
+
+- 订单保持 `status=4(逾期)`，不能被晚到回调改为已支付。
+- `payment_event.status=2(已忽略)`，用于记录该晚到回调已被识别但未改变业务状态。
 
 ### 4.13 拼车详情缓存测试
 
@@ -693,6 +756,7 @@ Content-Type: application/json
 | GET | `/api/player/pool/{poolId}/roles` | 角色选择状态 |
 | POST | `/api/player/order/create` | 创建订单 |
 | POST | `/api/player/order/pay/{orderNo}` | 模拟支付 |
+| POST | `/api/player/order/mock-callback` | Mock 支付回调 |
 | GET | `/api/player/order/my` | 我的订单 |
 | GET | `/api/player/credit/score` | 我的信用分 |
 | GET | `/api/player/credit/log` | 信用分流水 |

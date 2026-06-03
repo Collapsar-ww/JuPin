@@ -2,6 +2,34 @@
 
 ## 日期：2026-06-02
 
+### 本轮操作：落地 Mock 支付回调幂等模型
+
+#### 1. 实现内容
+
+- 新增 `payment_event` 支付事件流水表，用于记录 Mock 支付回调事件。
+- 新增 `PaymentEvent` 实体和 `PaymentEventMapper`。
+- 新增 `MockPayCallbackRequest`，提供显式 Mock 支付回调入口：
+  - `POST /api/player/order/mock-callback`
+- 现有 `POST /api/player/order/pay/{orderNo}` 保持兼容，内部生成 `payRequestNo`、`callbackRequestNo`、`channelTxnId`，并走同一套 Mock 回调逻辑。
+- 新增 `OrderStateMachine`，集中封装订单状态流转：
+  - `PENDING -> PAID`
+  - `PENDING -> OVERDUE`
+  - `PAID -> REFUNDED`
+  - `release_status 0 -> 1`
+- `TimeoutConsumer` 的订单逾期更新改为调用 `OrderStateMachine.markOverdue()`。
+
+#### 2. 幂等策略
+
+- 创建订单：继续使用 `user_id + idempotent_key` 唯一索引。
+- Mock 回调：使用 `payment_event.event_key`、`request_no`、`channel_txn_id` 唯一索引约束重复回调。
+- 支付成功：订单状态机使用 `where status = PENDING` 条件更新，重复回调不会重复改订单。
+- 超时后回调：订单已 `OVERDUE` 时，成功回调只记录为 `payment_event.status=2(已忽略)`，不回滚订单状态。
+
+#### 3. 文档
+
+- 更新 `API_TEST_GUIDE.md`，新增 Mock 支付回调幂等、重复回调和超时后回调测试步骤。
+- 更新 `剧本杀拼车系统_项目文档.md`，补充支付事件流水和订单状态机说明。
+
 ### 本轮操作：补充支付占座 MySQL 原子名额兜底并重构面试文档
 
 #### 1. 实现内容

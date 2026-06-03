@@ -48,6 +48,15 @@ public class OrderVO {
     @Schema(description = "支付时间")
     private LocalDateTime payTime;
 
+    @Schema(description = "支付请求幂等号")
+    private String payRequestNo;
+
+    @Schema(description = "支付回调幂等号")
+    private String callbackRequestNo;
+
+    @Schema(description = "渠道交易流水号")
+    private String channelTxnId;
+
     @Schema(description = "订单过期时间")
     private LocalDateTime expireTime;
 

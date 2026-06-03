@@ -13,6 +13,7 @@ import com.jupin.server.mapper.PoolMapper;
 import com.jupin.server.mapper.PoolMemberMapper;
 import com.jupin.server.service.MessageService;
 import com.jupin.server.service.CreditService;
+import com.jupin.server.service.impl.OrderStateMachine;
 import com.jupin.server.service.impl.PoolStateMachine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,7 @@ public class TimeoutConsumer {
     private final OrderMapper orderMapper;
     private final PoolMapper poolMapper;
     private final PoolMemberMapper memberMapper;
+    private final OrderStateMachine orderStateMachine;
     private final PoolStateMachine poolStateMachine;
     private final CreditService creditService;
     private final StringRedisTemplate stringRedis;
@@ -67,11 +69,7 @@ public class TimeoutConsumer {
         Order order = orderMapper.selectById(message.getOrderId());
         if (order == null || order.getStatus() != OrderStatus.PENDING) return;
 
-        int rows = orderMapper.update(null, new UpdateWrapper<Order>()
-                .set(DbFieldConstant.STATUS, OrderStatus.OVERDUE)
-                .eq(DbFieldConstant.ID, order.getId())
-                .eq(DbFieldConstant.STATUS, OrderStatus.PENDING));
-        if (rows == 0) return;
+        if (!orderStateMachine.markOverdue(order)) return;
 
         if (order.getType() != null && order.getType() == 0) {
             memberMapper.update(null, new UpdateWrapper<PoolMember>()
