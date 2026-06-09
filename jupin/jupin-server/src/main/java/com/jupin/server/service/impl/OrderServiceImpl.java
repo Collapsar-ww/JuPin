@@ -312,14 +312,9 @@ public class OrderServiceImpl implements OrderService {
                     .eq(DbFieldConstant.STATUS, MemberStatus.PENDING_PAYMENT));
             if (updated == 0) throw new BaseException(ErrorConstant.MEMBER_STATUS_CHANGED);
 
-            Long joinedCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
-                    .eq(DbFieldConstant.POOL_ID, pool.getId())
-                    .eq(DbFieldConstant.STATUS, MemberStatus.JOINED));
-            poolMapper.update(null, new UpdateWrapper<CarPool>()
-                    .set("current_members", joinedCount.intValue())
-                    .eq(DbFieldConstant.ID, pool.getId()));
             stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + pool.getId());
-            if (joinedCount.equals(pool.getMaxMembers().longValue())) {
+            CarPool latestPool = poolMapper.selectById(pool.getId());
+            if (latestPool != null && latestPool.getCurrentMembers().equals(latestPool.getMaxMembers())) {
                 int rows = poolMapper.update(null, new UpdateWrapper<CarPool>()
                         .set(DbFieldConstant.STATUS, PoolStatus.FULL)
                         .eq(DbFieldConstant.ID, pool.getId())
