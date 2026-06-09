@@ -1,5 +1,52 @@
 # 项目日志
 
+## 日期：2026-06-09
+
+### 本轮操作：修复并发幂等回查窗口并记录 A/B 冒烟问题
+
+#### 1. 问题现象
+
+第三版严格 A/B 冒烟测试中，`idempotent` 场景在优化分支 `cleanup-bench-review` 下仍出现部分请求 500：
+
+- 50 并发同一 `idempotentKey` 创建订单：仅 41 个请求业务成功，9 个请求返回 500，但最终只落 1 条订单。
+- 50 并发同一 `channelTxnId` Mock 回调：仅 41 个请求业务成功，9 个请求返回 500。
+
+这说明唯一索引已经阻止了重复落库，但失败请求没有被正确幂等返回。
+
+#### 2. 根因
+
+- 订单创建链路在 `DuplicateKeyException` 后立即按 `user_id + idempotent_key` 回查已有订单。
+- Mock 回调链路在 `payment_event` 唯一索引冲突后立即按 `event_key`、`channel_txn_id`、`request_no` 回查已有支付事件。
+- 高并发下，赢得唯一索引竞争的事务可能尚未提交；输掉竞争的请求立即回查时看不到已插入记录，于是继续抛出异常并返回 500。
+- 订单表还存在 `uk_user_pool_type(user_id, pool_id, type)` 唯一索引，重复订单也可能由该索引触发；只按 `idempotent_key` 回查不够稳妥。
+
+#### 3. 修复内容
+
+- `OrderServiceImpl.create()` 捕获 `DuplicateKeyException` 后改为短重试回查：
+  - 最多重试 5 次；
+  - 每次间隔 30ms；
+  - 优先按 `user_id + idempotent_key` 回查；
+  - 兜底按 `user_id + pool_id + type` 回查。
+- `OrderServiceImpl.insertPaymentEvent()` 捕获 `DuplicateKeyException` 后同样短重试回查：
+  - 按 `event_key`、`channel_txn_id`、`request_no` 三个唯一键依次查询。
+- 若重试后仍查不到已有记录，保留原异常抛出，避免吞掉真实异常。
+
+#### 4. 后续验证
+
+- 需要重新构造 `ab-baseline-idempotent`，使其基于最新 `cleanup-bench-review`，并继续只移除幂等保护。
+- 重新执行：
+
+```bash
+TESTS=idempotent AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+```
+
+期望优化分支结果：
+
+```text
+create:   ok=50, fail=0, distinct_orders=1
+callback: ok=50, fail=0
+```
+
 ## 日期：2026-06-02
 
 ### 本轮操作：落地 Mock 支付回调幂等模型

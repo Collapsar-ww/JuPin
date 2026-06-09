@@ -57,6 +57,8 @@ public class OrderServiceImpl implements OrderService {
     private static final long FINAL_PAY_TIMEOUT_HOURS = 24;
     private static final String PAY_STATUS_SUCCESS = "SUCCESS";
     private static final String EVENT_TYPE_PAY_CALLBACK = "PAY_CALLBACK";
+    private static final int IDEMPOTENT_RETRY_TIMES = 5;
+    private static final long IDEMPOTENT_RETRY_SLEEP_MS = 30;
 
     @Override
     @Transactional
@@ -122,10 +124,7 @@ public class OrderServiceImpl implements OrderService {
         try {
             orderMapper.insert(order);
         } catch (DuplicateKeyException e) {
-            Order existing = orderMapper.selectOne(new QueryWrapper<Order>()
-                    .eq("idempotent_key", normalizedIdempotentKey)
-                    .eq(DbFieldConstant.USER_ID, userId)
-                    .last("LIMIT 1"));
+            Order existing = waitForExistingOrder(userId, poolId, type, normalizedIdempotentKey);
             if (existing != null) return existing;
             throw e;
         }
@@ -363,19 +362,63 @@ public class OrderServiceImpl implements OrderService {
             paymentEventMapper.insert(event);
             return event;
         } catch (DuplicateKeyException e) {
-            PaymentEvent existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
-                    .eq(DbFieldConstant.EVENT_KEY, eventKey)
-                    .last("LIMIT 1"));
-            if (existing != null) return existing;
-            existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
-                    .eq("channel_txn_id", request.getChannelTxnId())
-                    .last("LIMIT 1"));
-            if (existing != null) return existing;
-            existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
-                    .eq("request_no", request.getCallbackRequestNo())
-                    .last("LIMIT 1"));
+            PaymentEvent existing = waitForExistingPaymentEvent(eventKey, request);
             if (existing != null) return existing;
             throw e;
+        }
+    }
+
+    private Order waitForExistingOrder(Long userId, Long poolId, Integer type, String idempotentKey) {
+        for (int i = 0; i < IDEMPOTENT_RETRY_TIMES; i++) {
+            Order existing = findExistingOrder(userId, poolId, type, idempotentKey);
+            if (existing != null) return existing;
+            sleepBeforeIdempotentRetry();
+        }
+        return findExistingOrder(userId, poolId, type, idempotentKey);
+    }
+
+    private Order findExistingOrder(Long userId, Long poolId, Integer type, String idempotentKey) {
+        Order existing = orderMapper.selectOne(new QueryWrapper<Order>()
+                .eq("idempotent_key", idempotentKey)
+                .eq(DbFieldConstant.USER_ID, userId)
+                .last("LIMIT 1"));
+        if (existing != null) return existing;
+        return orderMapper.selectOne(new QueryWrapper<Order>()
+                .eq(DbFieldConstant.USER_ID, userId)
+                .eq(DbFieldConstant.POOL_ID, poolId)
+                .eq(DbFieldConstant.TYPE, type)
+                .last("LIMIT 1"));
+    }
+
+    private PaymentEvent waitForExistingPaymentEvent(String eventKey, MockPayCallbackRequest request) {
+        for (int i = 0; i < IDEMPOTENT_RETRY_TIMES; i++) {
+            PaymentEvent existing = findExistingPaymentEvent(eventKey, request);
+            if (existing != null) return existing;
+            sleepBeforeIdempotentRetry();
+        }
+        return findExistingPaymentEvent(eventKey, request);
+    }
+
+    private PaymentEvent findExistingPaymentEvent(String eventKey, MockPayCallbackRequest request) {
+        PaymentEvent existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
+                .eq(DbFieldConstant.EVENT_KEY, eventKey)
+                .last("LIMIT 1"));
+        if (existing != null) return existing;
+        existing = paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
+                .eq("channel_txn_id", request.getChannelTxnId())
+                .last("LIMIT 1"));
+        if (existing != null) return existing;
+        return paymentEventMapper.selectOne(new QueryWrapper<PaymentEvent>()
+                .eq("request_no", request.getCallbackRequestNo())
+                .last("LIMIT 1"));
+    }
+
+    private void sleepBeforeIdempotentRetry() {
+        try {
+            Thread.sleep(IDEMPOTENT_RETRY_SLEEP_MS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new BaseException(ErrorConstant.SYSTEM_BUSY);
         }
     }
 
