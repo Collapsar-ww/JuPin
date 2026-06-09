@@ -104,10 +104,11 @@ public class OrderServiceImpl implements OrderService {
             }
         }
 
-        Long count = orderMapper.selectCount(new QueryWrapper<Order>()
+        Order existingOrder = orderMapper.selectOne(new QueryWrapper<Order>()
                 .eq(DbFieldConstant.USER_ID, userId).eq(DbFieldConstant.POOL_ID, poolId)
-                .eq(DbFieldConstant.TYPE, type).in(DbFieldConstant.STATUS, OrderStatus.PENDING, OrderStatus.PAID));
-        if (count > 0) throw new BaseException(ErrorConstant.ORDER_ALREADY_CREATED);
+                .eq(DbFieldConstant.TYPE, type).in(DbFieldConstant.STATUS, OrderStatus.PENDING, OrderStatus.PAID)
+                .last("LIMIT 1"));
+        if (existingOrder != null) return existingOrder;
 
         Order order = Order.builder()
                 .orderNo(snowflake.nextIdStr())
