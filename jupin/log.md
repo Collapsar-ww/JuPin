@@ -2,6 +2,80 @@
 
 ## 日期：2026-06-09
 
+### 本轮操作：补充第三版 A/B 梯度压力测试入口
+
+#### 1. 问题现象
+
+先前给出的完整测试命令主要用于冒烟和小流量 A/B 基准：
+
+- `oversell` 默认 20 人、并发 10；
+- `idempotent` 默认 50 请求、并发 10；
+- `cache` 默认 300 请求、并发 30。
+
+这些参数可以验证功能正确性和脚本流程，但不能充分体现“压力测试”，也缺少逐级加压的数据梯度。
+
+#### 2. 修复内容
+
+- 新增 `Test/ab/ab_pressure_suite.sh` 作为梯度压力测试入口。
+- 保留原 `Test/ab/ab_suite.sh` 作为冒烟测试和单档 A/B 基准入口。
+- 梯度压力测试默认分为 L1-L4：
+  - `oversell`：20/50/100/200 人并发支付占座，座位数固定为 3；
+  - `idempotent`：50/100/200/500 个重复请求；
+  - `cache`：300/1000/3000/10000 次详情读取。
+- 每个梯度档位内部仍保持严格 A/B：
+  - A 组切换到仅移除对应优化的基线分支；
+  - B 组切换回 `cleanup-bench-review`；
+  - 每轮测试前默认重建 MySQL 数据并清空 Redis，避免跨轮污染。
+
+#### 3. 使用方式
+
+冒烟测试继续使用：
+
+```bash
+TESTS=oversell AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+TESTS=idempotent AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+TESTS=cache AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+```
+
+正式梯度压力测试使用：
+
+```bash
+AB_ROUNDS=3 AB_WARMUP=1 AB_RESET_EACH_ROUND=true bash Test/ab/ab_pressure_suite.sh
+```
+
+如需扩大压力，可通过 `OVERSELL_LEVELS`、`IDEMPOTENT_LEVELS`、`CACHE_LEVELS` 自定义档位。
+
+### 本轮操作：修正缓存穿透 A/B 测试口径
+
+#### 1. 问题现象
+
+原 `cache` 测试虽然包含不存在 ID 请求，但主要通过 P95 延迟间接观察缓存效果，且配置项 `POOL_ID=1` 容易让测试口径看起来只覆盖存在 ID 的缓存性能。
+
+这不足以严格证明“空值缓存是否能拦截缓存穿透”。
+
+#### 2. 修复内容
+
+- 将 `ab_cache.sh` 的缓存测试拆为五个子场景：
+  - `happy`：100% 访问存在的 `POOL_ID`，测试热点详情缓存；
+  - `mixed`：存在 ID 与重复不存在 ID 混合；
+  - `penetration_repeat_cold`：10 个固定不存在 ID 冷启动访问；
+  - `penetration_repeat_warm`：同一批不存在 ID 再次访问，验证短 TTL 空值缓存命中；
+  - `penetration_unique`：每个请求使用不同不存在 ID，验证随机 ID 穿透压力。
+- 新增 Redis 空值缓存检查：
+  - 统计 `pool:detail:{id}` 是否写入 `__NULL__`；
+  - 输出 `redis_null_cache_keys`、`warm_null_cache_eligible_requests`。
+- 调整 A/B 聚合逻辑：
+  - `_comparison.tsv` 按 `scenario` 分组输出 P95；
+  - 避免把 `happy`、`mixed`、`penetration` 多个子场景混成一个平均值。
+
+#### 3. 结论口径
+
+- `POOL_ID` 只用于存在 ID 的热点缓存测试。
+- 缓存穿透测试由脚本生成不存在 ID：
+  - 固定重复 ID 用于验证空值缓存；
+  - 随机唯一 ID 用于体现空值缓存无法完全消除随机穿透，只能拦截重复穿透。
+- 当前脚本通过 Redis 空值 key 和 A/B 延迟差异验证穿透防护效果，不直接统计 Java 层实际 MySQL 查询次数；如需精确 DB 查询数，需要额外引入应用埋点或 MySQL general log。
+
 ### 本轮操作：修复并发幂等回查窗口并记录 A/B 冒烟问题
 
 #### 1. 问题现象

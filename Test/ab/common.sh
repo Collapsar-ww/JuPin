@@ -13,6 +13,7 @@ need_cmd awk
 need_cmd sort
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
+AB_CURL_MAX_TIME="${AB_CURL_MAX_TIME:-15}"
 POOL_ID="${POOL_ID:-1}"
 ORDER_TYPE="${ORDER_TYPE:-0}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d%H%M%S)}"
@@ -30,6 +31,7 @@ plain_post_json() {
   local path="$1"
   local body="$2"
   curl -sS -X POST "$BASE_URL$path" \
+    --max-time "$AB_CURL_MAX_TIME" \
     -H "Content-Type: application/json" \
     -d "$body"
 }
@@ -39,6 +41,7 @@ auth_post_json() {
   local body="$2"
   local token="$3"
   curl -sS -X POST "$BASE_URL$path" \
+    --max-time "$AB_CURL_MAX_TIME" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -d "$body"
@@ -48,7 +51,7 @@ auth_post_json_status() {
   local path="$1"
   local body="$2"
   local token="$3"
-  curl -sS -o /dev/null -w "%{time_total}\t%{http_code}\n" -X POST "$BASE_URL$path" \
+  curl -sS --max-time "$AB_CURL_MAX_TIME" -o /dev/null -w "%{time_total}\t%{http_code}\n" -X POST "$BASE_URL$path" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -d "$body"
@@ -57,7 +60,7 @@ auth_post_json_status() {
 post_json_status() {
   local path="$1"
   local body="$2"
-  curl -sS -o /dev/null -w "%{time_total}\t%{http_code}\n" -X POST "$BASE_URL$path" \
+  curl -sS --max-time "$AB_CURL_MAX_TIME" -o /dev/null -w "%{time_total}\t%{http_code}\n" -X POST "$BASE_URL$path" \
     -H "Content-Type: application/json" \
     -d "$body"
 }

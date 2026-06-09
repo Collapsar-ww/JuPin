@@ -32,26 +32,24 @@ run_idempotent_round() {
     body=$(jq -n --argjson poolId "$create_pool_id" --arg type "0" --arg idempotentKey "$idem_key" \
         '{poolId:$poolId,type:0,idempotentKey:$idempotentKey}')
     started_at=$(date +%s)
-    local running=0
-    for i in $(seq 1 "$REQUESTS"); do
-        (
-            local tmp meta http_code time_total biz_code order_no
-            tmp=$(mktemp)
-            meta=$(curl -sS -o "$tmp" -w "%{http_code} %{time_total}" -X POST "$BASE_URL/api/player/order/create" \
-                -H "Authorization: Bearer $write_token" \
-                -H "Content-Type: application/json" \
-                -d "$body")
-            http_code="${meta%% *}"
-            time_total="${meta#* }"
-            biz_code=$(jq -r '.code // "N/A"' "$tmp" 2>/dev/null || echo "N/A")
-            order_no=$(jq -r '.data.orderNo // empty' "$tmp" 2>/dev/null || echo "")
-            printf "%s\t%s\t%s\t%s\n" "$time_total" "$http_code" "$biz_code" "$order_no" >> "$create_raw"
-            rm -f "$tmp"
-        ) &
-        running=$((running + 1))
-        if (( running >= CONCURRENCY )); then wait; running=0; fi
-    done
-    wait
+    export BASE_URL AB_CURL_MAX_TIME
+    export IDEM_WRITE_TOKEN="$write_token"
+    export IDEM_CREATE_BODY="$body"
+    export IDEM_CREATE_RAW="$create_raw"
+    seq 1 "$REQUESTS" | xargs -P "$CONCURRENCY" -n 1 bash -c '
+        tmp=$(mktemp)
+        meta=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code} %{time_total}" -X POST "$BASE_URL/api/player/order/create" \
+            -H "Authorization: Bearer $IDEM_WRITE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$IDEM_CREATE_BODY" || echo "000 ${AB_CURL_MAX_TIME}")
+        http_code="${meta%% *}"
+        time_total="${meta#* }"
+        biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
+        order_no=$(jq -r ".data.orderNo // empty" "$tmp" 2>/dev/null || echo "")
+        message=$(jq -r ".msg // .message // empty" "$tmp" 2>/dev/null || echo "")
+        printf "%s\t%s\t%s\t%s\t%s\n" "$time_total" "$http_code" "$biz_code" "$order_no" "$message" >> "$IDEM_CREATE_RAW"
+        rm -f "$tmp"
+    ' _
     ended_at=$(date +%s)
 
     local create_ok distinct_orders create_500
@@ -79,31 +77,28 @@ run_idempotent_round() {
 
     local cb_start cb_end
     cb_start=$(date +%s)
-    running=0
-    for i in $(seq 1 "$REQUESTS"); do
-        (
-            local tmp meta http_code time_total biz_code cb_body
-            tmp=$(mktemp)
-            cb_body=$(jq -n \
-                --arg orderNo "$cb_order_no" \
-                --arg payRequestNo "pay-${channel_id}" \
-                --arg callbackRequestNo "cb-${channel_id}" \
-                --arg channelTxnId "$channel_id" \
-                '{orderNo:$orderNo,payRequestNo:$payRequestNo,callbackRequestNo:$callbackRequestNo,channelTxnId:$channelTxnId,payStatus:"SUCCESS"}')
-            meta=$(curl -sS -o "$tmp" -w "%{http_code} %{time_total}" -X POST "$BASE_URL/api/player/order/mock-callback" \
-                -H "Authorization: Bearer $write_token" \
-                -H "Content-Type: application/json" \
-                -d "$cb_body")
-            http_code="${meta%% *}"
-            time_total="${meta#* }"
-            biz_code=$(jq -r '.code // "N/A"' "$tmp" 2>/dev/null || echo "N/A")
-            printf "%s\t%s\t%s\n" "$time_total" "$http_code" "$biz_code" >> "$cb_raw"
-            rm -f "$tmp"
-        ) &
-        running=$((running + 1))
-        if (( running >= CONCURRENCY )); then wait; running=0; fi
-    done
-    wait
+    local cb_body
+    cb_body=$(jq -n \
+        --arg orderNo "$cb_order_no" \
+        --arg payRequestNo "pay-${channel_id}" \
+        --arg callbackRequestNo "cb-${channel_id}" \
+        --arg channelTxnId "$channel_id" \
+        '{orderNo:$orderNo,payRequestNo:$payRequestNo,callbackRequestNo:$callbackRequestNo,channelTxnId:$channelTxnId,payStatus:"SUCCESS"}')
+    export IDEM_CALLBACK_BODY="$cb_body"
+    export IDEM_CALLBACK_RAW="$cb_raw"
+    seq 1 "$REQUESTS" | xargs -P "$CONCURRENCY" -n 1 bash -c '
+        tmp=$(mktemp)
+        meta=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code} %{time_total}" -X POST "$BASE_URL/api/player/order/mock-callback" \
+            -H "Authorization: Bearer $IDEM_WRITE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$IDEM_CALLBACK_BODY" || echo "000 ${AB_CURL_MAX_TIME}")
+        http_code="${meta%% *}"
+        time_total="${meta#* }"
+        biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
+        message=$(jq -r ".msg // .message // empty" "$tmp" 2>/dev/null || echo "")
+        printf "%s\t%s\t%s\t%s\n" "$time_total" "$http_code" "$biz_code" "$message" >> "$IDEM_CALLBACK_RAW"
+        rm -f "$tmp"
+    ' _
     cb_end=$(date +%s)
 
     local cb_ok cb_500

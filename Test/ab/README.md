@@ -33,6 +33,7 @@ Test/ab/
 ├── ab_oversell.sh     # 超员防护 A/B 测试
 ├── ab_idempotent.sh   # 订单幂等 A/B 测试
 ├── ab_cache.sh        # 拼车缓存 A/B 测试
+├── ab_pressure_suite.sh # 梯度压力测试入口
 └── ab_suite.sh        # 总调度入口
 ```
 
@@ -69,18 +70,23 @@ Test/ab/
 
 #### 3. 拼车缓存 (`ab_cache.sh`)
 
-**场景**：300 次并发读取拼车详情，分三条子路径：
+**场景**：并发读取拼车详情，分五条子路径，既测热点缓存性能，也测缓存穿透防护。
 
 | 子场景 | ID 分布 | 测试目标 |
 |---|---|---|
 | Happy | 100% 存在的 ID | 缓存命中延迟 |
-| Mixed | 50% 存在 / 50% 不存在 | 混合负载 |
-| Penetration | 100% 不存在（10 个固定 ID 循环） | 穿透防护有效性 |
+| Mixed | 50% 存在 / 50% 重复不存在 | 混合读负载 |
+| Penetration Repeat Cold | 100% 不存在，10 个固定 ID 循环，冷启动 | 验证首轮穿透写入空值缓存 |
+| Penetration Repeat Warm | 同一批不存在 ID 再打一轮 | 验证短 TTL 空值缓存是否拦截重复穿透 |
+| Penetration Unique | 100% 不存在，每个请求不同 ID | 验证随机不存在 ID 对 DB 的真实压力 |
 
 **测量指标**：
 - 各子场景的 P50/P95/P99 延迟
-- Penetration 场景下首次请求 vs 后续请求的延迟差异
-- 估算 DB 命中次数
+- Repeat Cold vs Repeat Warm 的 P95 差异
+- Redis 中 `pool:detail:{id}` 空值缓存 key 数量
+- Warm 轮中可命中空值缓存的请求数
+- Unique 不存在 ID 场景的 P95，用于说明空值缓存只能拦截重复穿透，不能消除随机 ID 穿透
+- 当前脚本不直接统计 Java 层实际 MySQL 查询次数；如需精确 DB 查询数，需要额外接入应用埋点或 MySQL general log
 
 **A vs B**：
 - **A（无缓存）**：每次请求都查 MySQL，P95 较高；穿透场景每个不存在的 ID 都触发 DB 查询
@@ -89,6 +95,20 @@ Test/ab/
 ## 执行协议
 
 ### 运行方式
+
+#### 冒烟测试
+
+冒烟测试只用于确认脚本、分支切换、数据库重置和核心断言是否正常，不作为压力测试结论。
+
+```bash
+TESTS=oversell AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+TESTS=idempotent AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+TESTS=cache AB_ROUNDS=1 AB_WARMUP=0 AB_RESET_EACH_ROUND=true bash Test/ab/ab_suite.sh
+```
+
+#### 单档 A/B 基准
+
+`ab_suite.sh` 每次只使用一组参数，适合固定某个压力点做重复采样。
 
 ```bash
 # 运行全部三个测试
@@ -99,6 +119,48 @@ TESTS=oversell,cache bash Test/ab/ab_suite.sh
 
 # 自定义参数
 PLAYER_COUNT=30 POOL_MAX_MEMBERS=5 AB_ROUNDS=10 bash Test/ab/ab_suite.sh
+```
+
+#### 梯度压力测试
+
+正式压力测试使用 `ab_pressure_suite.sh`。该脚本会按 L1/L2/L3/L4 梯度逐档执行，每一档内部仍然走严格 A/B：
+
+1. 切换到对应基线分支；
+2. 提示人工编译并重启后端；
+3. 执行 A 组预热和正式轮次；
+4. 切换回 `cleanup-bench-review`；
+5. 再次提示人工编译并重启后端；
+6. 执行 B 组预热和正式轮次；
+7. 进入下一压力档。
+
+默认梯度：
+
+| 测试 | L1 | L2 | L3 | L4 |
+|---|---|---|---|---|
+| oversell | 20 人 / 并发 10 / 3 座 | 50 人 / 并发 25 / 3 座 | 100 人 / 并发 50 / 3 座 | 200 人 / 并发 100 / 3 座 |
+| idempotent | 50 请求 / 并发 10 | 100 请求 / 并发 25 | 200 请求 / 并发 50 | 500 请求 / 并发 100 |
+| cache | 300 请求 / 并发 30 | 1000 请求 / 并发 100 | 3000 请求 / 并发 200 | 10000 请求 / 并发 300 |
+
+执行全部梯度：
+
+```bash
+AB_ROUNDS=3 AB_WARMUP=1 AB_RESET_EACH_ROUND=true bash Test/ab/ab_pressure_suite.sh
+```
+
+仅执行某一项梯度：
+
+```bash
+TESTS=oversell AB_ROUNDS=3 AB_WARMUP=1 bash Test/ab/ab_pressure_suite.sh
+TESTS=idempotent AB_ROUNDS=3 AB_WARMUP=1 bash Test/ab/ab_pressure_suite.sh
+TESTS=cache AB_ROUNDS=3 AB_WARMUP=1 bash Test/ab/ab_pressure_suite.sh
+```
+
+自定义梯度：
+
+```bash
+OVERSELL_LEVELS=50:25:3,100:50:3,300:150:3 TESTS=oversell bash Test/ab/ab_pressure_suite.sh
+IDEMPOTENT_LEVELS=100:25,300:75,1000:200 TESTS=idempotent bash Test/ab/ab_pressure_suite.sh
+CACHE_LEVELS=1000:100:1,5000:300:1,20000:500:1 TESTS=cache bash Test/ab/ab_pressure_suite.sh
 ```
 
 ### 协议细节
@@ -121,6 +183,9 @@ PLAYER_COUNT=30 POOL_MAX_MEMBERS=5 AB_ROUNDS=10 bash Test/ab/ab_suite.sh
 | `PLAYER_COUNT` | `20` | 超员测试玩家数 |
 | `POOL_MAX_MEMBERS` | `3` | 超员测试车局上限 |
 | `TESTS` | `oversell,idempotent,cache` | 逗号分隔的测试列表 |
+| `OVERSELL_LEVELS` | `20:10:3,50:25:3,100:50:3,200:100:3` | 梯度压测超员档位，格式为 `玩家数:并发数:座位数` |
+| `IDEMPOTENT_LEVELS` | `50:10,100:25,200:50,500:100` | 梯度压测幂等档位，格式为 `请求数:并发数` |
+| `CACHE_LEVELS` | `300:30:1,1000:100:1,3000:200:1,10000:300:1` | 梯度压测缓存档位，格式为 `请求数:并发数:poolId` |
 
 ### 结果输出
 
@@ -134,11 +199,12 @@ Test/ab_results/
     └── 20260606120000_oversell_comparison.tsv  # A/B 对比报告
 ```
 
-对比报告格式 (`_comparison.tsv`):
+对比报告格式 (`_comparison.tsv`)。多子场景测试会按 `scenario` 分组输出，不再把所有 P95 混成一个均值：
 
 ```
 metric          A_mean    A_stddev    B_mean    B_stddev    improvement_pct
-p95_seconds     0.1234    0.0100      0.0890    0.0080      27.9
+cache_happy.p95_seconds                       0.1234    0.0100    0.0890    0.0080    27.9
+cache_penetration_repeat_warm.p95_seconds     0.1200    0.0100    0.0300    0.0040    75.0
 ```
 
 ## 预期简历数据

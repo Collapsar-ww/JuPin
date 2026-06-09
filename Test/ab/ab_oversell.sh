@@ -67,25 +67,29 @@ run_oversell_round() {
     echo "[oversell] $PLAYER_COUNT players joining concurrently (concurrency=$CONCURRENCY)..."
     local started_at ended_at
     started_at=$(date +%s)
-    local running=0
+    local token_file
+    token_file=$(mktemp)
     for i in $(seq 0 $((PLAYER_COUNT - 1))); do
-        (
-            local tmp start_ns end_ns time_total http_code biz_code
-            tmp=$(mktemp)
-            start_ns=$(date +%s%N)
-            http_code=$(curl -sS -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/pool/$pool_id/join" \
-                -H "Authorization: Bearer ${tokens[$i]}" \
-                -H "Content-Type: application/json")
-            end_ns=$(date +%s%N)
-            time_total=$(awk "BEGIN {printf \"%.6f\", ($end_ns - $start_ns) / 1000000000}")
-            biz_code=$(jq -r '.code // "N/A"' "$tmp" 2>/dev/null || echo "N/A")
-            printf "%s\t%s\t%s\t%s\n" "$time_total" "$http_code" "$biz_code" "$i" >> "$raw"
-            rm -f "$tmp"
-        ) &
-        running=$((running + 1))
-        if (( running >= CONCURRENCY )); then wait; running=0; fi
+        printf "%s\t%s\n" "$i" "${tokens[$i]}" >> "$token_file"
     done
-    wait
+    export BASE_URL AB_CURL_MAX_TIME
+    export RAW_FILE="$raw"
+    export POOL_ID_ARG="$pool_id"
+    xargs -P "$CONCURRENCY" -n 2 bash -c '
+        idx="$1"
+        token="$2"
+        tmp=$(mktemp)
+        start_ns=$(date +%s%N)
+        http_code=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/pool/$POOL_ID_ARG/join" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" || echo "000")
+        end_ns=$(date +%s%N)
+        time_total=$(awk "BEGIN {printf \"%.6f\", ($end_ns - $start_ns) / 1000000000}")
+        biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
+        printf "%s\t%s\t%s\t%s\n" "$time_total" "$http_code" "$biz_code" "$idx" >> "$RAW_FILE"
+        rm -f "$tmp"
+    ' _ < "$token_file"
+    rm -f "$token_file"
     ended_at=$(date +%s)
 
     # 4. Collect join results
@@ -112,43 +116,46 @@ run_oversell_round() {
         local pay_start pay_end
         pay_start=$(date +%s)
 
+        local joined_file
+        joined_file=$(mktemp)
         for i in "${!joined_indices[@]}"; do
             local idx="${joined_indices[$i]}"
             local token="${joined_tokens[$i]}"
-            (
-                local tmp http_code code
-                tmp=$(mktemp)
-                # Create order
-                local order_body
-                order_body=$(jq -n --argjson poolId "$pool_id" --arg type "0" \
-                    --arg idempotentKey "oversell-${run_tail}-${idx}" \
-                    '{poolId:$poolId,type:0,idempotentKey:$idempotentKey}')
-                http_code=$(curl -sS -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/order/create" \
-                    -H "Authorization: Bearer $token" \
-                    -H "Content-Type: application/json" \
-                    -d "$order_body")
-                biz_code=$(jq -r '.code // "N/A"' "$tmp" 2>/dev/null || echo "N/A")
-                local order_no
-                order_no=$(jq -r '.data.orderNo // empty' "$tmp")
-
-                if [[ "$http_code" != "200" || "$biz_code" != "200" || -z "$order_no" ]]; then
-                    printf "ORDER_FAIL\t%s\t%s\t%s\n" "$http_code" "$biz_code" "$idx" >> "$pay_raw"
-                    rm -f "$tmp"
-                    exit 0
-                fi
-
-                # Pay
-                tmp=$(mktemp)
-                http_code=$(curl -sS -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/order/pay/$order_no" \
-                    -H "Authorization: Bearer $token" \
-                    -H "Content-Type: application/json" \
-                    -d "{}")
-                biz_code=$(jq -r '.code // "N/A"' "$tmp" 2>/dev/null || echo "N/A")
-                printf "PAY\t%s\t%s\t%s\t%s\n" "$http_code" "$biz_code" "$order_no" "$idx" >> "$pay_raw"
-                rm -f "$tmp"
-            ) &
+            printf "%s\t%s\n" "$idx" "$token" >> "$joined_file"
         done
-        wait
+        export PAY_RAW_FILE="$pay_raw"
+        export RUN_TAIL_ARG="$run_tail"
+        export POOL_ID_ARG="$pool_id"
+        xargs -P "$CONCURRENCY" -n 2 bash -c '
+            idx="$1"
+            token="$2"
+            tmp=$(mktemp)
+            order_body=$(jq -n --argjson poolId "$POOL_ID_ARG" --arg type "0" \
+                --arg idempotentKey "oversell-${RUN_TAIL_ARG}-${idx}" \
+                "{poolId:\$poolId,type:0,idempotentKey:\$idempotentKey}")
+            http_code=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/order/create" \
+                -H "Authorization: Bearer $token" \
+                -H "Content-Type: application/json" \
+                -d "$order_body" || echo "000")
+            biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
+            order_no=$(jq -r ".data.orderNo // empty" "$tmp" 2>/dev/null || echo "")
+
+            if [[ "$http_code" != "200" || "$biz_code" != "200" || -z "$order_no" ]]; then
+                printf "ORDER_FAIL\t%s\t%s\t%s\n" "$http_code" "$biz_code" "$idx" >> "$PAY_RAW_FILE"
+                rm -f "$tmp"
+                exit 0
+            fi
+
+            tmp=$(mktemp)
+            http_code=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/order/pay/$order_no" \
+                -H "Authorization: Bearer $token" \
+                -H "Content-Type: application/json" \
+                -d "{}" || echo "000")
+            biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
+            printf "PAY\t%s\t%s\t%s\t%s\n" "$http_code" "$biz_code" "$order_no" "$idx" >> "$PAY_RAW_FILE"
+            rm -f "$tmp"
+        ' _ < "$joined_file"
+        rm -f "$joined_file"
         pay_end=$(date +%s)
 
         # Count successful payments

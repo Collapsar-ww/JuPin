@@ -21,6 +21,13 @@ AB_RESULTS_DIR="${AB_RESULTS_DIR:-$ROOT_DIR/Test/ab_results}"
 AB_BASELINE_BRANCH="${AB_BASELINE_BRANCH:-}"     # set per test
 AB_OPTIMIZED_BRANCH="${AB_OPTIMIZED_BRANCH:-cleanup-bench-review}"
 AB_RESET_EACH_ROUND="${AB_RESET_EACH_ROUND:-true}"
+AB_AUTO_BACKEND="${AB_AUTO_BACKEND:-false}"
+AB_MAVEN_CMD="${AB_MAVEN_CMD:-/Applications/IntelliJ IDEA.app/Contents/plugins/maven/lib/maven3/bin/mvn}"
+AB_JAVA_HOME="${AB_JAVA_HOME:-}"
+AB_BACKEND_JAR="${AB_BACKEND_JAR:-$ROOT_DIR/jupin/jupin-server/target/jupin-server-1.0.0.jar}"
+AB_BACKEND_PID_FILE="${AB_BACKEND_PID_FILE:-/tmp/jupin_ab_backend.pid}"
+AB_BACKEND_LOG_DIR="${AB_BACKEND_LOG_DIR:-$AB_RESULTS_DIR/backend_logs}"
+AB_CURL_MAX_TIME="${AB_CURL_MAX_TIME:-15}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 LABEL="${LABEL:-ab}"
 
@@ -43,15 +50,20 @@ stddev_from_file() {
 # Prompt user to rebuild and restart backend after branch switch
 wait_for_backend() {
     local branch="$1"
-    echo ""
-    echo "=============================================="
-    echo "BRANCH SWITCHED TO: $branch"
-    echo "Please:"
-    echo "  1. mvn clean package -DskipTests"
-    echo "  2. Restart the Spring Boot application"
-    echo "=============================================="
-    echo -n "Press ENTER when backend is ready on $BASE_URL ..."
-    read -r
+    if [[ "$AB_AUTO_BACKEND" == "true" ]]; then
+        build_and_restart_backend "$branch"
+    else
+        echo ""
+        echo "=============================================="
+        echo "BRANCH SWITCHED TO: $branch"
+        echo "Please:"
+        echo "  1. mvn clean package -DskipTests"
+        echo "  2. Restart the Spring Boot application"
+        echo "=============================================="
+        echo -n "Press ENTER when backend is ready on $BASE_URL ..."
+        read -r
+    fi
+
     # Quick health check
     local ok=0
     for i in $(seq 1 30); do
@@ -62,10 +74,75 @@ wait_for_backend() {
         sleep 2
     done
     if [[ "$ok" != "1" ]]; then
+        if [[ "$AB_AUTO_BACKEND" == "true" ]]; then
+            echo "Backend log tail:" >&2
+            tail -80 "$AB_BACKEND_LOG_DIR/${RUN_ID}_${branch}.log" 2>/dev/null || true
+        fi
         echo "ERROR: Backend not reachable after 60s. Exiting." >&2
         exit 1
     fi
     echo "Backend is up."
+}
+
+resolve_java_home() {
+    if [[ -n "$AB_JAVA_HOME" ]]; then
+        echo "$AB_JAVA_HOME"
+        return
+    fi
+    /usr/libexec/java_home -v 17
+}
+
+stop_backend() {
+    if [[ -f "$AB_BACKEND_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$AB_BACKEND_PID_FILE")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            echo "Stopping backend pid=$pid"
+            kill "$pid" 2>/dev/null || true
+            for _ in $(seq 1 20); do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.5
+            done
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f "$AB_BACKEND_PID_FILE"
+    fi
+
+    local port_pid
+    port_pid=$(lsof -ti tcp:8080 2>/dev/null || true)
+    if [[ -n "$port_pid" ]]; then
+        echo "Stopping process on port 8080: $port_pid"
+        kill $port_pid 2>/dev/null || true
+        sleep 2
+        kill -9 $port_pid 2>/dev/null || true
+    fi
+}
+
+build_and_restart_backend() {
+    local branch="$1"
+    local java_home java_bin log_file
+    java_home=$(resolve_java_home)
+    java_bin="$java_home/bin/java"
+    mkdir -p "$AB_BACKEND_LOG_DIR"
+    log_file="$AB_BACKEND_LOG_DIR/${RUN_ID}_${branch}.log"
+
+    echo ""
+    echo "=============================================="
+    echo "BRANCH SWITCHED TO: $branch"
+    echo "Auto building with IDEA Maven:"
+    echo "  JAVA_HOME=$java_home"
+    echo "  MAVEN=$AB_MAVEN_CMD"
+    echo "=============================================="
+
+    (cd "$ROOT_DIR/jupin" && JAVA_HOME="$java_home" "$AB_MAVEN_CMD" clean package -DskipTests)
+
+    stop_backend
+    echo "Starting backend jar: $AB_BACKEND_JAR"
+    nohup "$java_bin" -jar "$AB_BACKEND_JAR" > "$log_file" 2>&1 &
+    echo $! > "$AB_BACKEND_PID_FILE"
+    echo "Backend pid=$(cat "$AB_BACKEND_PID_FILE") log=$log_file"
 }
 
 # Switch git branch
@@ -128,37 +205,32 @@ aggregate_comparison() {
     echo "B (optimized) dir: $b_dir"
     echo ""
 
-    # Collect P95 from A rounds. write_summary columns:
-    # 13=avg_seconds, 14=p50_seconds, 15=p95_seconds, 16=p99_seconds.
-    local a_p95s=()
-    local b_p95s=()
+    local tmp scenarios scenario
+    tmp=$(mktemp)
     for f in "$a_dir"/*_summary.tsv; do
-        local p95
-        p95=$(tail -1 "$f" | awk -F'\t' '{print $15}')
-        a_p95s+=("$p95")
-    done
+        tail -1 "$f" | awk -F'\t' '{print "A\t" $3 "\t" $15}'
+    done >> "$tmp"
     for f in "$b_dir"/*_summary.tsv; do
-        local p95
-        p95=$(tail -1 "$f" | awk -F'\t' '{print $15}')
-        b_p95s+=("$p95")
-    done
+        tail -1 "$f" | awk -F'\t' '{print "B\t" $3 "\t" $15}'
+    done >> "$tmp"
 
-    # Compute mean and stddev
-    local a_mean a_std b_mean b_std
-    a_mean=$(printf '%s\n' "${a_p95s[@]}" | awk '{sum+=$1; n++} END {printf "%.4f", sum/n}')
-    a_std=$(printf '%s\n' "${a_p95s[@]}" | awk -v m="$a_mean" '{sum+=($1-m)^2; n++} END {if(n>1) printf "%.4f", sqrt(sum/(n-1)); else print "0"}')
-    b_mean=$(printf '%s\n' "${b_p95s[@]}" | awk '{sum+=$1; n++} END {printf "%.4f", sum/n}')
-    b_std=$(printf '%s\n' "${b_p95s[@]}" | awk -v m="$b_mean" '{sum+=($1-m)^2; n++} END {if(n>1) printf "%.4f", sqrt(sum/(n-1)); else print "0"}')
+    scenarios=$(awk -F'\t' '{print $2}' "$tmp" | sort -u)
 
-    local improvement
-    improvement=$(awk -v a="$a_mean" -v b="$b_mean" 'BEGIN {printf "%.1f", (a - b) / a * 100}')
+    echo -e "metric\tA_mean\tA_stddev\tB_mean\tB_stddev\timprovement_pct" > "$output"
+    while IFS= read -r scenario; do
+        [[ -z "$scenario" ]] && continue
 
-    {
-        echo -e "metric\tA_mean\tA_stddev\tB_mean\tB_stddev\timprovement_pct"
-        echo -e "p95_seconds\t${a_mean}\t${a_std}\t${b_mean}\t${b_std}\t${improvement}"
-    } > "$output"
+        local a_mean a_std b_mean b_std improvement
+        a_mean=$(awk -F'\t' -v s="$scenario" '$1 == "A" && $2 == s {sum += $3; n++} END {if (n == 0) print "0"; else printf "%.4f", sum / n}' "$tmp")
+        a_std=$(awk -F'\t' -v s="$scenario" -v m="$a_mean" '$1 == "A" && $2 == s {sum += ($3 - m)^2; n++} END {if (n > 1) printf "%.4f", sqrt(sum / (n - 1)); else print "0"}' "$tmp")
+        b_mean=$(awk -F'\t' -v s="$scenario" '$1 == "B" && $2 == s {sum += $3; n++} END {if (n == 0) print "0"; else printf "%.4f", sum / n}' "$tmp")
+        b_std=$(awk -F'\t' -v s="$scenario" -v m="$b_mean" '$1 == "B" && $2 == s {sum += ($3 - m)^2; n++} END {if (n > 1) printf "%.4f", sqrt(sum / (n - 1)); else print "0"}' "$tmp")
+        improvement=$(awk -v a="$a_mean" -v b="$b_mean" 'BEGIN {if (a == 0) print "0"; else printf "%.1f", (a - b) / a * 100}')
 
-    echo "P95:  A=${a_mean}s (±${a_std})  B=${b_mean}s (±${b_std})  improvement=${improvement}%"
+        echo -e "${scenario}.p95_seconds\t${a_mean}\t${a_std}\t${b_mean}\t${b_std}\t${improvement}" >> "$output"
+        echo "${scenario} P95: A=${a_mean}s (±${a_std})  B=${b_mean}s (±${b_std})  improvement=${improvement}%"
+    done <<< "$scenarios"
+    rm -f "$tmp"
     echo "Comparison saved to $output"
 }
 
