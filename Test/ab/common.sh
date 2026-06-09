@@ -142,12 +142,8 @@ make_write_phone() {
     return
   fi
 
-  local digits suffix
-  digits=$(printf "%s%s" "$RUN_ID" "$LABEL" | tr -cd '0-9')
-  suffix="${digits: -9}"
-  while (( ${#suffix} < 9 )); do
-    suffix="0$suffix"
-  done
+  local suffix
+  suffix=$(printf "%s" "${RUN_ID}_${LABEL}" | cksum | awk '{printf "%09d", $1 % 1000000000}')
   WRITE_PHONE="13$suffix"
 }
 
