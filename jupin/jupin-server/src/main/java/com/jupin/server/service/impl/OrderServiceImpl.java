@@ -32,6 +32,7 @@ import org.redisson.api.RedissonClient;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -61,7 +62,7 @@ public class OrderServiceImpl implements OrderService {
     private static final long IDEMPOTENT_RETRY_SLEEP_MS = 30;
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Order create(Long userId, Long poolId, Integer type, String idempotentKey) {
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
@@ -161,7 +162,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Order mockPayCallback(Long userId, MockPayCallbackRequest request) {
         if (!StringUtils.hasText(request.getPayRequestNo())) {
             request.setPayRequestNo("PAY-" + request.getCallbackRequestNo());

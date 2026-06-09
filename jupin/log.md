@@ -47,6 +47,18 @@ create:   ok=50, fail=0, distinct_orders=1
 callback: ok=50, fail=0
 ```
 
+#### 5. 二次定位补充
+
+短重试回查后再次执行 `idempotent` 冒烟，失败请求耗时约 0.21-0.24s，说明 5 次短重试确实执行完毕，但优化分支仍有 9 个请求返回 500。进一步判断根因是 MySQL 默认 `REPEATABLE READ` 隔离级别下，同一事务在插入前已经做过普通查询，后续重复键冲突后的重试回查仍使用旧快照，无法看到赢得唯一索引竞争并刚提交的事务记录。
+
+补充修复：
+
+- 将 `OrderServiceImpl.create()` 事务隔离级别调整为 `READ_COMMITTED`。
+- 将 `OrderServiceImpl.mockPayCallback()` 事务隔离级别调整为 `READ_COMMITTED`。
+- 保留短重试回查逻辑，用于等待唯一键竞争赢家提交。
+
+这样重复键后的每次回查都能读取最新已提交数据，避免在同一事务快照内反复读不到已有订单或支付事件。
+
 ## 日期：2026-06-02
 
 ### 本轮操作：落地 Mock 支付回调幂等模型
