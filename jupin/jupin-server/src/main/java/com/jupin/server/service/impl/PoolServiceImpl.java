@@ -229,55 +229,38 @@ public class PoolServiceImpl implements PoolService {
     @Override
     @Transactional
     public void join(Long userId, Long poolId) {
-        String lockKey = RedisKeyConstant.POOL_LOCK_PREFIX + poolId;
-        RLock lock = redisson.getLock(lockKey);
-        try {
-            if (!lock.tryLock(3, 10, TimeUnit.SECONDS)) {
-                throw new BaseException(ErrorConstant.SYSTEM_BUSY);
-            }
-            CarPool pool = poolMapper.selectById(poolId);
-            if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
-            if (pool.getStatus() != PoolStatus.OPEN) throw new BaseException(ErrorConstant.POOL_CANNOT_JOIN);
-            if (pool.getCurrentMembers() >= pool.getMaxMembers()) throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
+        CarPool pool = poolMapper.selectById(poolId);
+        if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+        if (pool.getStatus() != PoolStatus.OPEN) throw new BaseException(ErrorConstant.POOL_CANNOT_JOIN);
 
-            PoolMember existing = memberMapper.selectOne(new QueryWrapper<PoolMember>()
-                    .eq(DbFieldConstant.POOL_ID, poolId).eq(DbFieldConstant.USER_ID, userId));
-            if (existing != null) {
-                if (existing.getStatus() == MemberStatus.JOINED
-                        || existing.getStatus() == MemberStatus.PENDING_PAYMENT
-                        || existing.getStatus() == MemberStatus.PENDING_REVIEW) {
-                    throw new BaseException(ErrorConstant.ALREADY_IN_POOL_OR_PENDING);
-                }
-                int newStatus = pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW;
-                if (newStatus == MemberStatus.PENDING_PAYMENT) {
-                    reserveSeat(poolId);
-                }
-                existing.setStatus(newStatus);
-                existing.setJoinTime(LocalDateTime.now());
-                existing.setLeaveTime(null);
-                memberMapper.updateById(existing);
-            } else {
-                int status = pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW;
-                if (status == MemberStatus.PENDING_PAYMENT) {
-                    reserveSeat(poolId);
-                }
-                PoolMember member = PoolMember.builder()
-                        .poolId(poolId)
-                        .userId(userId)
-                        .role(0)
-                        .status(status)
-                        .joinTime(LocalDateTime.now())
-                        .build();
-                memberMapper.insert(member);
+        PoolMember existing = memberMapper.selectOne(new QueryWrapper<PoolMember>()
+                .eq(DbFieldConstant.POOL_ID, poolId).eq(DbFieldConstant.USER_ID, userId));
+        int status = pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW;
+        if (existing != null) {
+            if (existing.getStatus() == MemberStatus.JOINED
+                    || existing.getStatus() == MemberStatus.PENDING_PAYMENT
+                    || existing.getStatus() == MemberStatus.PENDING_REVIEW) {
+                throw new BaseException(ErrorConstant.ALREADY_IN_POOL_OR_PENDING);
             }
-            refreshSeatStatus(poolId);
-            evictPoolDetail(poolId);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BaseException(ErrorConstant.SYSTEM_BUSY);
-        } finally {
-            if (lock.isHeldByCurrentThread()) lock.unlock();
+            existing.setStatus(status);
+            existing.setJoinTime(LocalDateTime.now());
+            existing.setLeaveTime(null);
+            memberMapper.updateById(existing);
+        } else {
+            PoolMember member = PoolMember.builder()
+                    .poolId(poolId)
+                    .userId(userId)
+                    .role(0)
+                    .status(status)
+                    .joinTime(LocalDateTime.now())
+                    .build();
+            memberMapper.insert(member);
         }
+        if (status == MemberStatus.PENDING_PAYMENT) {
+            pool.setCurrentMembers(pool.getCurrentMembers() == null ? 1 : pool.getCurrentMembers() + 1);
+            poolMapper.updateById(pool);
+        }
+        evictPoolDetail(poolId);
     }
 
     @Override
