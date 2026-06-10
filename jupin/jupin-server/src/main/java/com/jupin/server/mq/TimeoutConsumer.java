@@ -72,12 +72,20 @@ public class TimeoutConsumer {
         if (!orderStateMachine.markOverdue(order)) return;
 
         if (order.getType() != null && order.getType() == 0) {
-            memberMapper.update(null, new UpdateWrapper<PoolMember>()
+            int memberUpdated = memberMapper.update(null, new UpdateWrapper<PoolMember>()
                     .set(DbFieldConstant.STATUS, MemberStatus.LEFT)
                     .set("leave_time", LocalDateTime.now())
                     .eq(DbFieldConstant.POOL_ID, order.getPoolId())
                     .eq(DbFieldConstant.USER_ID, order.getUserId())
                     .eq(DbFieldConstant.STATUS, MemberStatus.PENDING_PAYMENT));
+            if (memberUpdated > 0) {
+                poolMapper.update(null, new UpdateWrapper<CarPool>()
+                        .setSql("current_members = GREATEST(current_members - 1, 0)")
+                        .eq(DbFieldConstant.ID, order.getPoolId())
+                        .in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL)
+                        .apply("current_members > 0"));
+                poolStateMachine.rollbackToOpen(order.getPoolId());
+            }
             evictPoolDetail(order.getPoolId());
             messageService.sendMessage("timeout_deposit_" + order.getId() + "_" + order.getUserId(),
                     order.getUserId(), 0, "押金订单逾期",

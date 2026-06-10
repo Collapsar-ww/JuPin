@@ -118,7 +118,7 @@ public class PoolServiceImpl implements PoolService {
                 .deposit(request.getDeposit())
                 .joinType(request.getJoinType())
                 .dmId(resolveInitialDmId(type, userId, request.getDmId()))
-                .currentMembers(0)
+                .currentMembers(type == 0 ? 1 : 0)
                 .status(PoolStatus.OPEN)
                 .build();
         poolMapper.insert(pool);
@@ -132,6 +132,7 @@ public class PoolServiceImpl implements PoolService {
                     .joinTime(LocalDateTime.now())
                     .build();
             memberMapper.insert(ownerMember);
+            refreshSeatStatus(pool.getId());
         }
         sendPoolStartTimeout(pool);
         return pool;
@@ -248,20 +249,28 @@ public class PoolServiceImpl implements PoolService {
                     throw new BaseException(ErrorConstant.ALREADY_IN_POOL_OR_PENDING);
                 }
                 int newStatus = pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW;
+                if (newStatus == MemberStatus.PENDING_PAYMENT) {
+                    reserveSeat(poolId);
+                }
                 existing.setStatus(newStatus);
                 existing.setJoinTime(LocalDateTime.now());
                 existing.setLeaveTime(null);
                 memberMapper.updateById(existing);
             } else {
+                int status = pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW;
+                if (status == MemberStatus.PENDING_PAYMENT) {
+                    reserveSeat(poolId);
+                }
                 PoolMember member = PoolMember.builder()
                         .poolId(poolId)
                         .userId(userId)
                         .role(0)
-                        .status(pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW)
+                        .status(status)
                         .joinTime(LocalDateTime.now())
                         .build();
                 memberMapper.insert(member);
             }
+            refreshSeatStatus(poolId);
             evictPoolDetail(poolId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -293,19 +302,15 @@ public class PoolServiceImpl implements PoolService {
         if (member == null) throw new BaseException(ErrorConstant.NOT_IN_POOL);
 
         if (pool.getStatus() == PoolStatus.OPEN || pool.getStatus() == PoolStatus.FULL) {
-            boolean joined = member.getStatus() == MemberStatus.JOINED;
+            boolean seatHeld = member.getStatus() == MemberStatus.JOINED
+                    || member.getStatus() == MemberStatus.PENDING_PAYMENT;
             member.setStatus(MemberStatus.LEFT);
             member.setLeaveTime(LocalDateTime.now());
             memberMapper.updateById(member);
 
-            if (joined) {
-                pool.setCurrentMembers(Math.max(0, pool.getCurrentMembers() - 1));
-                poolMapper.updateById(pool);
+            if (seatHeld) {
+                releaseSeat(poolId);
                 evictPoolDetail(poolId);
-
-                if (pool.getStatus() == PoolStatus.FULL) {
-                    stateMachine.rollbackToOpen(poolId);
-                }
             }
         } else if (pool.getStatus() == PoolStatus.COMPLETED) {
             long recentLeftCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
@@ -336,10 +341,26 @@ public class PoolServiceImpl implements PoolService {
         if (pool == null || !pool.getOwnerId().equals(userId)) {
             throw new BaseException(ErrorConstant.NO_PERMISSION_TO_REVIEW);
         }
-        memberMapper.update(null, new UpdateWrapper<PoolMember>()
-                .set("status", MemberStatus.PENDING_PAYMENT)
-                .eq("pool_id", poolId).eq("user_id", targetUserId).eq("status", MemberStatus.PENDING_REVIEW));
-        evictPoolDetail(poolId);
+        String lockKey = RedisKeyConstant.POOL_LOCK_PREFIX + poolId;
+        RLock lock = redisson.getLock(lockKey);
+        try {
+            if (!lock.tryLock(3, 10, TimeUnit.SECONDS)) {
+                throw new BaseException(ErrorConstant.SYSTEM_BUSY);
+            }
+            int updated = memberMapper.update(null, new UpdateWrapper<PoolMember>()
+                    .set("status", MemberStatus.PENDING_PAYMENT)
+                    .eq("pool_id", poolId).eq("user_id", targetUserId).eq("status", MemberStatus.PENDING_REVIEW));
+            if (updated > 0) {
+                reserveSeat(poolId);
+                refreshSeatStatus(poolId);
+                evictPoolDetail(poolId);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BaseException(ErrorConstant.SYSTEM_BUSY);
+        } finally {
+            if (lock.isHeldByCurrentThread()) lock.unlock();
+        }
     }
 
     @Override
@@ -425,7 +446,10 @@ public class PoolServiceImpl implements PoolService {
         List<PoolMember> members = memberMapper.selectList(new QueryWrapper<PoolMember>()
                 .eq("pool_id", poolId).eq("status", MemberStatus.JOINED));
         if (members.size() != pool.getMaxMembers()) {
-            syncCurrentMembers(pool, members.size());
+            Long lockedCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
+                    .eq("pool_id", poolId)
+                    .in("status", MemberStatus.PENDING_PAYMENT, MemberStatus.JOINED));
+            syncCurrentMembers(pool, lockedCount.intValue());
             throw new BaseException(ErrorConstant.POOL_NOT_FULL);
         }
         boolean confirmationStarted = members.stream()
@@ -527,6 +551,44 @@ public class PoolServiceImpl implements PoolService {
         if (pool.getCurrentMembers() != null && pool.getCurrentMembers() == joinedCount) return;
         pool.setCurrentMembers(joinedCount);
         poolMapper.updateById(pool);
+    }
+
+    private void reserveSeat(Long poolId) {
+        int updated = poolMapper.update(null, new UpdateWrapper<CarPool>()
+                .setSql("current_members = current_members + 1")
+                .eq(DbFieldConstant.ID, poolId)
+                .eq(DbFieldConstant.STATUS, PoolStatus.OPEN)
+                .apply("current_members < max_members"));
+        if (updated == 0) {
+            throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
+        }
+    }
+
+    private void releaseSeat(Long poolId) {
+        poolMapper.update(null, new UpdateWrapper<CarPool>()
+                .setSql("current_members = GREATEST(current_members - 1, 0)")
+                .eq(DbFieldConstant.ID, poolId)
+                .in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL)
+                .apply("current_members > 0"));
+        refreshSeatStatus(poolId);
+    }
+
+    private void refreshSeatStatus(Long poolId) {
+        CarPool latest = poolMapper.selectById(poolId);
+        if (latest == null) return;
+        if (latest.getCurrentMembers() != null && latest.getMaxMembers() != null
+                && latest.getCurrentMembers() >= latest.getMaxMembers()
+                && latest.getStatus() == PoolStatus.OPEN) {
+            poolMapper.update(null, new UpdateWrapper<CarPool>()
+                    .set(DbFieldConstant.STATUS, PoolStatus.FULL)
+                    .eq(DbFieldConstant.ID, poolId)
+                    .eq(DbFieldConstant.STATUS, PoolStatus.OPEN)
+                    .apply("current_members >= max_members"));
+        } else if (latest.getCurrentMembers() != null && latest.getMaxMembers() != null
+                && latest.getCurrentMembers() < latest.getMaxMembers()
+                && latest.getStatus() == PoolStatus.FULL) {
+            stateMachine.rollbackToOpen(poolId);
+        }
     }
 
     @Override

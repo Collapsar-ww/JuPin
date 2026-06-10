@@ -9,6 +9,63 @@ PLAYER_COUNT="${PLAYER_COUNT:-20}"
 CONCURRENCY="${CONCURRENCY:-10}"
 POOL_MAX_MEMBERS="${POOL_MAX_MEMBERS:-3}"
 SCENARIO="oversell"
+OVERSELL_PASSWORD="${OVERSELL_PASSWORD:-player123}"
+OVERSELL_PASSWORD_HASH="${OVERSELL_PASSWORD_HASH:-\$2b\$10\$Fuf39z2Evtx59qO6yBXYiu7b.3lVm57Q6oQ2RnMXahwWHksVuSb.S}"
+OVERSELL_TOKENS=()
+
+seed_oversell_users() {
+    local run_tail="$1"
+    local count="$2"
+    local sql_file
+    sql_file=$(mktemp)
+
+    {
+        echo "USE \`${MYSQL_DATABASE:-script_murder_carpool}\`;"
+        echo "INSERT INTO \`user\` (\`phone\`, \`password\`, \`nickname\`, \`gender\`, \`role\`, \`city\`, \`preference\`, \`credit_score\`, \`status\`) VALUES"
+        for i in $(seq 0 "$count"); do
+            local phone comma
+            phone="13${run_tail}$(printf '%04d' "$i")"
+            comma=","
+            if [[ "$i" == "$count" ]]; then
+                comma=";"
+            fi
+            printf "('%s','%s','AB压测-%s-%s',0,0,'上海','硬核,机制',100,1)%s\n" \
+                "$phone" "$OVERSELL_PASSWORD_HASH" "$run_tail" "$i" "$comma"
+        done
+    } > "$sql_file"
+
+    if [[ "${AB_BACKEND_MODE:-local}" == "remote" ]]; then
+        remote_required
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_SSH" \
+            "$REMOTE_DOCKER_CMD exec -i '$REMOTE_MYSQL_CONTAINER' mysql -u'$REMOTE_MYSQL_USER' -p'$REMOTE_MYSQL_PASSWORD' --default-character-set=utf8mb4" < "$sql_file"
+    else
+        docker exec -i "${MYSQL_CONTAINER:-jp-mysql}" mysql \
+            -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-root}" \
+            --default-character-set=utf8mb4 < "$sql_file"
+    fi
+
+    rm -f "$sql_file"
+}
+
+login_oversell_users() {
+    local run_tail="$1"
+    local count="$2"
+
+    OVERSELL_TOKENS=()
+    for i in $(seq 0 "$count"); do
+        local phone body resp token
+        phone="13${run_tail}$(printf '%04d' "$i")"
+        body=$(jq -n --arg phone "$phone" --arg password "$OVERSELL_PASSWORD" \
+            '{phone:$phone,password:$password,role:"player"}')
+        resp=$(plain_post_json "/api/auth/login" "$body")
+        token=$(echo "$resp" | jq -r '.data.accessToken // empty')
+        if [[ -z "$token" ]]; then
+            echo "[oversell] login failed for preseeded phone=$phone response=$resp" >&2
+            exit 1
+        fi
+        OVERSELL_TOKENS+=("$token")
+    done
+}
 
 # ========== SINGLE-ROUND TEST ==========
 run_oversell_round() {
@@ -25,27 +82,13 @@ run_oversell_round() {
     local run_tail
     run_tail=$(printf "%s" "${RUN_ID}_${AB_ROUND_LABEL}" | cksum | awk '{printf "%06d", $1 % 1000000}')
 
-    # 1. Register players
-    echo "[oversell] Registering $PLAYER_COUNT players..."
+    # 1. Pre-seed owner + players. Only the player set participates in the
+    # high-concurrency join pressure section; setup time is not included.
+    echo "[oversell] Pre-seeding 1 owner + $PLAYER_COUNT players..."
     local tokens=()
-    for i in $(seq 1 "$PLAYER_COUNT"); do
-        local seq_num phone
-        seq_num=$(printf '%03d' "$i")
-        phone="13${run_tail}${seq_num}"
-
-        local body resp token
-        body=$(jq -n --arg phone "$phone" --arg password "player123" \
-            --arg nickname "AB压测-${run_tail}-${i}" \
-            '{phone:$phone,password:$password,nickname:$nickname,gender:0,role:"player",city:"上海"}')
-        resp=$(plain_post_json "/api/auth/register" "$body")
-        token=$(echo "$resp" | jq -r '.data.accessToken // empty')
-        if [[ -z "$token" ]]; then
-            body=$(jq -n --arg phone "$phone" --arg password "player123" '{phone:$phone,password:$password,role:"player"}')
-            resp=$(plain_post_json "/api/auth/login" "$body")
-            token=$(echo "$resp" | jq -r '.data.accessToken // empty')
-        fi
-        tokens+=("$token")
-    done
+    seed_oversell_users "$run_tail" "$PLAYER_COUNT"
+    login_oversell_users "$run_tail" "$PLAYER_COUNT"
+    tokens=("${OVERSELL_TOKENS[@]}")
 
     # 2. Create a small-capacity pool (owner = first player)
     local write_token="${tokens[0]}"
@@ -69,7 +112,7 @@ run_oversell_round() {
     started_at=$(date +%s)
     local token_file
     token_file=$(mktemp)
-    for i in $(seq 0 $((PLAYER_COUNT - 1))); do
+    for i in $(seq 1 "$PLAYER_COUNT"); do
         printf "%s\t%s\n" "$i" "${tokens[$i]}" >> "$token_file"
     done
     export BASE_URL AB_CURL_MAX_TIME
@@ -109,89 +152,42 @@ run_oversell_round() {
         '$2 == 200 && $3 == 200 {count++} END {print count + 0}'
     echo "[oversell] join_ok=$joined_count / $PLAYER_COUNT"
 
-    # 5. Each joined player creates order + pays
-    local pay_ok=0
-    if [[ $joined_count -gt 0 ]]; then
-        echo "[oversell] $joined_count joined players creating orders + paying..."
-        local pay_start pay_end
-        pay_start=$(date +%s)
-
-        local joined_file
-        joined_file=$(mktemp)
-        for i in "${!joined_indices[@]}"; do
-            local idx="${joined_indices[$i]}"
-            local token="${joined_tokens[$i]}"
-            printf "%s\t%s\n" "$idx" "$token" >> "$joined_file"
-        done
-        export PAY_RAW_FILE="$pay_raw"
-        export RUN_TAIL_ARG="$run_tail"
-        export POOL_ID_ARG="$pool_id"
-        xargs -P "$CONCURRENCY" -n 2 bash -c '
-            idx="$1"
-            token="$2"
-            tmp=$(mktemp)
-            order_body=$(jq -n --argjson poolId "$POOL_ID_ARG" --arg type "0" \
-                --arg idempotentKey "oversell-${RUN_TAIL_ARG}-${idx}" \
-                "{poolId:\$poolId,type:0,idempotentKey:\$idempotentKey}")
-            http_code=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/order/create" \
-                -H "Authorization: Bearer $token" \
-                -H "Content-Type: application/json" \
-                -d "$order_body" || echo "000")
-            biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
-            order_no=$(jq -r ".data.orderNo // empty" "$tmp" 2>/dev/null || echo "")
-
-            if [[ "$http_code" != "200" || "$biz_code" != "200" || -z "$order_no" ]]; then
-                printf "ORDER_FAIL\t%s\t%s\t%s\n" "$http_code" "$biz_code" "$idx" >> "$PAY_RAW_FILE"
-                rm -f "$tmp"
-                exit 0
-            fi
-
-            tmp=$(mktemp)
-            http_code=$(curl -sS --max-time "$AB_CURL_MAX_TIME" -o "$tmp" -w "%{http_code}" -X POST "$BASE_URL/api/player/order/pay/$order_no" \
-                -H "Authorization: Bearer $token" \
-                -H "Content-Type: application/json" \
-                -d "{}" || echo "000")
-            biz_code=$(jq -r ".code // \"N/A\"" "$tmp" 2>/dev/null || echo "N/A")
-            printf "PAY\t%s\t%s\t%s\t%s\n" "$http_code" "$biz_code" "$order_no" "$idx" >> "$PAY_RAW_FILE"
-            rm -f "$tmp"
-        ' _ < "$joined_file"
-        rm -f "$joined_file"
-        pay_end=$(date +%s)
-
-        # Count successful payments
-        while IFS=$'\t' read -r typ http code _ __; do
-            if [[ "$typ" == "PAY" && "$http" == "200" && "$code" == "200" ]]; then
-                pay_ok=$((pay_ok + 1))
-            fi
-        done < "$pay_raw"
-    fi
-
-    # 6. DB consistency check
+    # 5. DB consistency check. Seat occupation is defined as PENDING_PAYMENT + JOINED.
     local container="${MYSQL_CONTAINER:-jp-mysql}"
     local db="${MYSQL_DATABASE:-script_murder_carpool}"
-    docker exec -i "$container" mysql \
-        -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-root}" \
-        --default-character-set=utf8mb4 "$db" \
-        -e "
+    local sql="
+        SELECT 'pending_payment_count' AS metric, COUNT(*) AS val FROM pool_member WHERE pool_id = $pool_id AND status = 1;
         SELECT 'joined_count' AS metric, COUNT(*) AS val FROM pool_member WHERE pool_id = $pool_id AND status = 2;
+        SELECT 'locked_count' AS metric, COUNT(*) AS val FROM pool_member WHERE pool_id = $pool_id AND status IN (1, 2);
         SELECT 'current_members' AS metric, current_members AS val FROM car_pool WHERE id = $pool_id;
         SELECT 'drift' AS metric, cp.current_members - COALESCE(actual.cnt, 0) AS val
         FROM car_pool cp
-        LEFT JOIN (SELECT pool_id, COUNT(*) AS cnt FROM pool_member WHERE status = 2 GROUP BY pool_id) actual
+        LEFT JOIN (SELECT pool_id, COUNT(*) AS cnt FROM pool_member WHERE status IN (1, 2) GROUP BY pool_id) actual
         ON actual.pool_id = cp.id WHERE cp.id = $pool_id;
         SELECT 'duplicate_member_count' AS metric, COUNT(*) AS val FROM (
           SELECT pool_id, user_id FROM pool_member WHERE pool_id = $pool_id GROUP BY pool_id, user_id HAVING COUNT(*) > 1
         ) t;
         SELECT 'oversell' AS metric, CASE WHEN COUNT(*) > $POOL_MAX_MEMBERS THEN COUNT(*) - $POOL_MAX_MEMBERS ELSE 0 END AS val
-        FROM pool_member WHERE pool_id = $pool_id AND status = 2;
-    " > "$consistency_file"
+        FROM pool_member WHERE pool_id = $pool_id AND status IN (1, 2);
+    "
+    if [[ "${AB_BACKEND_MODE:-local}" == "remote" ]]; then
+        remote_exec "$REMOTE_DOCKER_CMD exec -i '$REMOTE_MYSQL_CONTAINER' mysql -u'$REMOTE_MYSQL_USER' -p'$REMOTE_MYSQL_PASSWORD' --default-character-set=utf8mb4 '$REMOTE_MYSQL_DATABASE' -e \"$sql\"" > "$consistency_file"
+    else
+        docker exec -i "$container" mysql \
+            -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-root}" \
+            --default-character-set=utf8mb4 "$db" \
+            -e "$sql" > "$consistency_file"
+    fi
 
-    echo "[oversell] pay_ok=$pay_ok max=$POOL_MAX_MEMBERS oversell=$(( pay_ok > POOL_MAX_MEMBERS ? pay_ok - POOL_MAX_MEMBERS : 0 ))"
+    local locked_count oversell_count
+    locked_count=$(awk '$1 == "locked_count" {print $2}' "$consistency_file")
+    oversell_count=$(awk '$1 == "oversell" {print $2}' "$consistency_file")
+    echo "[oversell] join_ok=$joined_count locked=$locked_count max=$POOL_MAX_MEMBERS oversell=$oversell_count"
     cat "$consistency_file"
 
     # Return non-zero if oversold (for A variants this is expected; the comparison report handles it)
-    if [[ "$pay_ok" -gt "$POOL_MAX_MEMBERS" ]]; then
-        echo "[oversell] OVERSOLD: $pay_ok > $POOL_MAX_MEMBERS"
+    if [[ "$oversell_count" -gt 0 ]]; then
+        echo "[oversell] OVERSOLD: locked=$locked_count > $POOL_MAX_MEMBERS"
     fi
 }
 

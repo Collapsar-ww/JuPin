@@ -11,7 +11,7 @@ Test/ab/
 ├── ab_common.sh           # A/B 编排：切分支、构建重启、reset、聚合
 ├── common.sh              # HTTP、登录、统计等公共函数
 ├── reset_state.sh         # 本地 MySQL + Redis reset
-├── ab_oversell.sh         # 支付占座超员防护 A/B
+├── ab_oversell.sh         # 加入车局锁座超员防护 A/B
 ├── ab_idempotent.sh       # 订单/支付幂等 A/B
 ├── ab_cache.sh            # 拼车详情缓存与穿透 A/B
 └── README.md              # 详细测试方案

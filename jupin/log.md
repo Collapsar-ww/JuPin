@@ -1482,3 +1482,40 @@ docker build --target builder -t jupin-backend-compile-check .
 - 当前 Dockerfile 不再依赖 BuildKit，因此兼容性更好。
 - 代价是首次 Docker 构建会重新下载 Maven 依赖，速度较慢。本次首次完整验证耗时约 21 分钟。
 - 如果后续开发环境稳定支持 buildx/BuildKit，可以再考虑恢复 Maven cache mount，提高 Docker 构建速度。
+
+---
+
+## 日期：2026-06-10
+
+### 本轮操作：统一“加入即锁座”语义并调整 oversell A/B 压测
+
+#### 1. 背景
+
+此前超员防护口径偏向“押金支付阶段占正式座位”，但当前业务讨论后统一为：用户成功加入车局即锁定座位，押金支付只负责确认锁座和履约约束。因此 oversell 压测应高并发打 `POST /api/player/pool/{poolId}/join`，而不是把注册或支付作为核心并发区。
+
+#### 2. 后端调整
+
+- `PoolServiceImpl.create()`：玩家发起人初始为 `PENDING_PAYMENT`，并计入 `currentMembers`，符合“发起即占座”语义。
+- `PoolServiceImpl.join()`：加入自动通过车局时，先通过 Redisson 按 `poolId` 串行化，再执行 MySQL 条件更新 `current_members = current_members + 1 where current_members < max_members` 完成原子锁座。
+- `PoolServiceImpl.approve()`：审核通过进入 `PENDING_PAYMENT` 时同步占用名额。
+- `PoolServiceImpl.leave()`：`PENDING_PAYMENT` 和 `JOINED` 成员退出都会释放已锁座名额。
+- `OrderServiceImpl.payDeposit()`：押金支付不再增加 `currentMembers`，只负责订单 `PENDING -> PAID` 和成员 `PENDING_PAYMENT -> JOINED` 状态确认。
+- `TimeoutConsumer.handleOrderPaymentTimeout()`：押金订单超时后，成员从 `PENDING_PAYMENT` 退出并释放锁座名额。
+
+#### 3. 测试脚本调整
+
+- `Test/ab/ab_oversell.sh`：准备阶段串行注册 1 个发起人 + N 个玩家；压测阶段只让 N 个玩家并发加入同一车局。
+- oversell 一致性校验从 `JOINED` 改为 `PENDING_PAYMENT + JOINED`，检查 `locked_count <= maxMembers`、`current_members` 漂移和重复成员。
+- oversell 远程模式下支持通过远程 Docker MySQL 容器执行一致性 SQL。
+
+#### 4. 验证
+
+```bash
+bash -n Test/ab/ab_oversell.sh Test/ab/ab_suite.sh Test/ab/ab_pressure_suite.sh Test/ab/ab_common.sh
+
+JAVA_HOME=/Users/wangkexin/Library/Java/JavaVirtualMachines/ms-17.0.19/Contents/Home \
+/Applications/IntelliJ\ IDEA.app/Contents/plugins/maven/lib/maven3/bin/mvn \
+  -pl jupin-server -am package -DskipTests
+```
+
+结果：脚本语法检查通过，后端 Maven 编译通过。

@@ -9,6 +9,8 @@ TESTS="${TESTS:-oversell,idempotent,cache}"
 AB_ROUNDS="${AB_ROUNDS:-3}"
 AB_WARMUP="${AB_WARMUP:-1}"
 AB_RESET_EACH_ROUND="${AB_RESET_EACH_ROUND:-true}"
+REMOTE_PROJECT_DIR="${REMOTE_PROJECT_DIR:-~/JuPin}"
+REMOTE_COMPOSE_DIR="${REMOTE_COMPOSE_DIR:-$REMOTE_PROJECT_DIR/jupin}"
 
 # Level format:
 #   oversell:   userCount:concurrency:maxMembers
@@ -27,8 +29,6 @@ normalize_remote_paths() {
     fi
 
     local local_home="${HOME%/}"
-    REMOTE_PROJECT_DIR="${REMOTE_PROJECT_DIR:-~/JuPin}"
-    REMOTE_COMPOSE_DIR="${REMOTE_COMPOSE_DIR:-$REMOTE_PROJECT_DIR/jupin}"
     if [[ "$REMOTE_PROJECT_DIR" == "$local_home/"* ]]; then
         REMOTE_PROJECT_DIR="~/${REMOTE_PROJECT_DIR#"$local_home"/}"
     fi

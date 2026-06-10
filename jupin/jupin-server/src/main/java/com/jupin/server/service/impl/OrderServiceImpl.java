@@ -291,19 +291,6 @@ public class OrderServiceImpl implements OrderService {
             if (pool.getStatus() != PoolStatus.OPEN && pool.getStatus() != PoolStatus.FULL) {
                 throw new BaseException(ErrorConstant.CURRENT_POOL_STATUS_CANNOT_PAY_DEPOSIT);
             }
-            if (pool.getCurrentMembers() >= pool.getMaxMembers()) {
-                throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
-            }
-
-            int seatUpdated = poolMapper.update(null, new UpdateWrapper<CarPool>()
-                    .setSql("current_members = current_members + 1")
-                    .eq(DbFieldConstant.ID, pool.getId())
-                    .in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL)
-                    .apply("current_members < max_members"));
-            if (seatUpdated == 0) {
-                throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
-            }
-
             boolean paid = orderStateMachine.paySuccess(latest, callback.getPayRequestNo(), callback.getCallbackRequestNo(), callback.getChannelTxnId());
             if (!paid) throw new BaseException(ErrorConstant.ORDER_STATUS_INVALID);
 
@@ -314,21 +301,6 @@ public class OrderServiceImpl implements OrderService {
             if (updated == 0) throw new BaseException(ErrorConstant.MEMBER_STATUS_CHANGED);
 
             stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + pool.getId());
-            CarPool latestPool = poolMapper.selectById(pool.getId());
-            if (latestPool != null && latestPool.getCurrentMembers().equals(latestPool.getMaxMembers())) {
-                int rows = poolMapper.update(null, new UpdateWrapper<CarPool>()
-                        .set(DbFieldConstant.STATUS, PoolStatus.FULL)
-                        .eq(DbFieldConstant.ID, pool.getId())
-                        .eq(DbFieldConstant.STATUS, PoolStatus.OPEN));
-                if (rows == 0 && pool.getStatus() == PoolStatus.OPEN) {
-                    throw new BaseException(ErrorConstant.POOL_STATUS_ABNORMAL_CANNOT_SET_FULL);
-                }
-            } else if (pool.getStatus() == PoolStatus.FULL) {
-                poolMapper.update(null, new UpdateWrapper<CarPool>()
-                        .set(DbFieldConstant.STATUS, PoolStatus.OPEN)
-                        .eq(DbFieldConstant.ID, pool.getId())
-                        .eq(DbFieldConstant.STATUS, PoolStatus.FULL));
-            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BaseException(ErrorConstant.SYSTEM_BUSY);

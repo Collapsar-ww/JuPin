@@ -19,11 +19,11 @@ cleanup-bench-review (HEAD, 全量优化)
 
 | 基线分支 | 修改文件 | 移除内容 |
 |---|---|---|
-| `ab-baseline-oversell` | `OrderServiceImpl.java` | Redisson 分布式锁 (`RLock.tryLock`)、容量守卫 (`current_members < max_members`)、成员状态守卫 (`PENDING_PAYMENT`)、人数反算 |
+| `ab-baseline-oversell` | `PoolServiceImpl.java` | 加入车局锁座阶段的 Redisson 分布式锁、`current_members < max_members` 原子名额更新、满员状态维护 |
 | `ab-baseline-idempotent` | `OrderServiceImpl.java` | 下单幂等 Key 预查、`DuplicateKeyException` 捕获并回查、支付事件去重异常捕获 |
 | `ab-baseline-cache` | `PoolServiceImpl.java` | Cache Aside 读缓存、空值缓存哨兵、固定 TTL + 随机偏移写缓存、写后主动失效 |
 
-三个基线分支各自只移除一个优化点（oversell: `payDeposit()`, idempotent: `create()` + `insertPaymentEvent()`, cache: `getDetail()` 及相关写后失效调用），改动范围需要保持精确可控。
+三个基线分支各自只移除一个优化点（oversell: `join()/approve()` 锁座防护, idempotent: `create()` + `insertPaymentEvent()`, cache: `getDetail()` 及相关写后失效调用），改动范围需要保持精确可控。
 
 ## 测试脚本
 
@@ -41,16 +41,16 @@ Test/ab/
 
 #### 1. 超员防护 (`ab_oversell.sh`)
 
-**场景**：N 个玩家（默认 20）并发加入一个限员 M（默认 3）的拼车局，加入后立即创建订单并支付。
+**场景**：先低并发准备 1 个发起人和 N 个玩家，再让 N 个玩家并发加入一个限员 M（默认 3）的拼车局。项目口径为“加入即锁座”，押金支付只负责确认锁座，不参与本测试的并发区。
 
 **测量指标**：
-- 成功支付人数 vs 车局上限（超员率）
-- `current_members` 与实际 JOINED 成员数的漂移
+- 锁座人数（`PENDING_PAYMENT + JOINED`）vs 车局上限（超员率）
+- `current_members` 与实际锁座人数的漂移
 - 重复成员检测
 - P95 延迟
 
 **A vs B**：
-- **A（无防护）**：无锁并发 increment，预期超员率 > 40%，`current_members` 漂移
+- **A（无防护）**：加入阶段无锁/无原子名额兜底，预期锁座数超过 `maxMembers`
 - **B（有防护）**：分布式锁串行化 + 条件更新，预期超员率 0%，漂移 0
 
 #### 2. 订单幂等 (`ab_idempotent.sh`)
@@ -313,7 +313,7 @@ cache_penetration_repeat_warm.p95_seconds     0.1200    0.0100    0.0300    0.00
 ## 预期简历数据
 
 ### 超员防护
-> 30 人并发支付 3 座车局：无防护时超员率 40%+，人数漂移 N；引入 Redisson 分布式锁 + MySQL 条件更新后超员率 0%，漂移 0，P95 延迟仅增加 Zms。
+> 30 人并发加入 3 座车局：无防护时锁座数超过上限；引入 Redisson 分布式锁 + MySQL `current_members < max_members` 条件更新后，`PENDING_PAYMENT + JOINED` 始终不超过 3，重复成员数和人数漂移均为 0。
 
 ### 订单幂等
 > 50 并发同一幂等 Key 创建：无防护时仅 2% 请求成功，其余 500；引入幂等 Key + 唯一索引 + DuplicateKeyException 回查后 100% 成功，仅创建 1 条订单。50 并发同一 channelTxnId 回调同理。
@@ -327,7 +327,7 @@ cache_penetration_repeat_warm.p95_seconds     0.1200    0.0100    0.0300    0.00
 2. **小样本量**：5 轮数据采集仅能提供参考级置信度。简历中建议表述为"压测对比"而非"统计学显著"。
 3. **单机环境**：未控制 MySQL/Redis 实例隔离，结果受本地资源竞争影响。
 4. **手动环节**：分支切换后需人工编译重启后端（`wait_for_backend` 提示），无法全自动化。
-5. **超员测试的支付路径**：走的是 Mock 回调而非真实微信支付，不包含外部 HTTP 调用延迟。
+5. **超员测试的锁座口径**：测试高并发 `join`，统计 `PENDING_PAYMENT + JOINED` 锁座人数；押金支付链路不在 oversell 并发区内。
 
 ## 前置条件
 
