@@ -140,22 +140,10 @@ public class PoolServiceImpl implements PoolService {
 
     @Override
     public CarPool getDetail(Long poolId) {
-        String cacheKey = RedisKeyConstant.POOL_DETAIL_PREFIX + poolId;
-        String cached = stringRedis.opsForValue().get(cacheKey);
-        if (RedisKeyConstant.CACHE_NULL.equals(cached)) {
-            throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
-        }
-        if (StringUtils.hasText(cached)) {
-            return JSONUtil.toBean(cached, CarPool.class);
-        }
-
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null) {
-            stringRedis.opsForValue().set(cacheKey, RedisKeyConstant.CACHE_NULL, POOL_DETAIL_NULL_TTL_SECONDS, TimeUnit.SECONDS);
             throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         }
-        stringRedis.opsForValue().set(cacheKey, JSONUtil.toJsonStr(pool),
-                POOL_DETAIL_TTL_MINUTES * 60 + new Random().nextInt(120), TimeUnit.SECONDS);
         return pool;
     }
 
