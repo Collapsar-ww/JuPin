@@ -70,17 +70,6 @@ public class OrderServiceImpl implements OrderService {
             throw new BaseException(ErrorConstant.INVALID_ORDER_TYPE);
         }
         String normalizedIdempotentKey = resolveIdempotentKey(userId, poolId, type, idempotentKey);
-        Order idempotentOrder = orderMapper.selectOne(new QueryWrapper<Order>()
-                .eq("idempotent_key", normalizedIdempotentKey)
-                .eq(DbFieldConstant.USER_ID, userId)
-                .last("LIMIT 1"));
-        if (idempotentOrder != null) {
-            return idempotentOrder;
-        }
-        Long conflictCount = orderMapper.selectCount(new QueryWrapper<Order>()
-                .eq("idempotent_key", normalizedIdempotentKey)
-                .ne(DbFieldConstant.USER_ID, userId));
-        if (conflictCount > 0) throw new BaseException(ErrorConstant.IDEMPOTENT_KEY_CONFLICT);
 
         PoolMember member = memberMapper.selectOne(new QueryWrapper<PoolMember>()
                 .eq(DbFieldConstant.POOL_ID, poolId)
@@ -123,13 +112,7 @@ public class OrderServiceImpl implements OrderService {
                 .releaseStatus(0)
                 .expireTime(resolveExpireTime(type))
                 .build();
-        try {
-            orderMapper.insert(order);
-        } catch (DuplicateKeyException e) {
-            Order existing = waitForExistingOrder(userId, poolId, type, normalizedIdempotentKey);
-            if (existing != null) return existing;
-            throw e;
-        }
+        orderMapper.insert(order);
         timeoutProducer.send(new TimeoutMessage(resolvePaymentTimeoutType(type), order.getId(), poolId, userId),
                 type == 0 ? TimeUnit.MINUTES.toMillis(DEPOSIT_PAY_TIMEOUT_MINUTES) : TimeUnit.HOURS.toMillis(FINAL_PAY_TIMEOUT_HOURS));
         return order;
@@ -332,14 +315,8 @@ public class OrderServiceImpl implements OrderService {
                 .status(PaymentEventStatus.PROCESSING)
                 .rawPayload(JSONUtil.toJsonStr(request))
                 .build();
-        try {
-            paymentEventMapper.insert(event);
-            return event;
-        } catch (DuplicateKeyException e) {
-            PaymentEvent existing = waitForExistingPaymentEvent(eventKey, request);
-            if (existing != null) return existing;
-            throw e;
-        }
+        paymentEventMapper.insert(event);
+        return event;
     }
 
     private Order waitForExistingOrder(Long userId, Long poolId, Integer type, String idempotentKey) {
