@@ -2,6 +2,7 @@ package com.jupin.server.engine;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -10,6 +11,7 @@ import java.util.Map;
 
 @Slf4j
 @Component
+@ConditionalOnProperty(prefix = "jupin.match", name = "enabled", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class MatchTask {
 

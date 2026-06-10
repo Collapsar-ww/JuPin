@@ -14,6 +14,9 @@ need_cmd sort
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 AB_CURL_MAX_TIME="${AB_CURL_MAX_TIME:-15}"
+AB_NO_PROXY="${AB_NO_PROXY:-*}"
+export no_proxy="$AB_NO_PROXY"
+export NO_PROXY="$AB_NO_PROXY"
 POOL_ID="${POOL_ID:-1}"
 ORDER_TYPE="${ORDER_TYPE:-0}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d%H%M%S)}"

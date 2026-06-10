@@ -33,12 +33,22 @@ echo "Rounds per test:  $AB_ROUNDS (data) + $AB_WARMUP (warmup)"
 echo "Results dir:      $AB_RESULTS_DIR"
 echo "Tests:            $TESTS"
 echo "Reset each round: $AB_RESET_EACH_ROUND"
+echo "Backend mode:     ${AB_BACKEND_MODE:-local}"
+if [[ "${AB_BACKEND_MODE:-local}" == "remote" ]]; then
+    echo "Remote SSH:       ${REMOTE_SSH:-<unset>}"
+fi
 echo "=============================================="
 echo ""
 echo "Before running:"
-echo "  1. Make sure MySQL + Redis containers are running"
-echo "  2. You will be prompted to rebuild + restart after each branch switch"
-echo "  3. By default, each A/B round resets MySQL and Redis before requests are sent"
+if [[ "${AB_BACKEND_MODE:-local}" == "remote" ]]; then
+    echo "  1. Make sure the remote server can be reached by SSH and HTTP"
+    echo "  2. The script will checkout branches, rebuild app, restart app, and reset remote MySQL + Redis"
+    echo "  3. Run from the branch that contains the latest Test/ab scripts"
+else
+    echo "  1. Make sure MySQL + Redis containers are running"
+    echo "  2. You will be prompted to rebuild + restart after each branch switch"
+    echo "  3. By default, each A/B round resets MySQL and Redis before requests are sent"
+fi
 echo "=============================================="
 echo ""
 

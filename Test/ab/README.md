@@ -155,13 +155,116 @@ TESTS=idempotent AB_ROUNDS=3 AB_WARMUP=1 bash Test/ab/ab_pressure_suite.sh
 TESTS=cache AB_ROUNDS=3 AB_WARMUP=1 bash Test/ab/ab_pressure_suite.sh
 ```
 
-自定义梯度：
+自定义梯度使用 `用户档:并发档:业务参数` 输入，不把正式高压档位硬编码到脚本里：
 
 ```bash
 OVERSELL_LEVELS=50:25:3,100:50:3,300:150:3 TESTS=oversell bash Test/ab/ab_pressure_suite.sh
 IDEMPOTENT_LEVELS=100:25,300:75,1000:200 TESTS=idempotent bash Test/ab/ab_pressure_suite.sh
 CACHE_LEVELS=1000:100:1,5000:300:1,20000:500:1 TESTS=cache bash Test/ab/ab_pressure_suite.sh
 ```
+
+格式说明：
+
+| 测试 | 输入格式 | 含义 |
+|---|---|---|
+| `OVERSELL_LEVELS` | `用户数:并发数:座位数` | N 个玩家并发加入/支付一个 M 座车局 |
+| `IDEMPOTENT_LEVELS` | `请求数:并发数` | N 个重复下单/回调请求并发打同一幂等场景 |
+| `CACHE_LEVELS` | `请求数:并发数:poolId` | N 个读请求按指定场景访问同一个基准车局和不存在 ID 集合 |
+ 
+正式高压测试示例：
+
+```bash
+CACHE_LEVELS=1000:100:1,2000:200:1,5000:300:1,10000:500:1 TESTS=cache bash Test/ab/ab_pressure_suite.sh
+IDEMPOTENT_LEVELS=1000:100,2000:200,5000:300 TESTS=idempotent bash Test/ab/ab_pressure_suite.sh
+OVERSELL_LEVELS=500:200:3,1000:300:3,2000:500:3 TESTS=oversell bash Test/ab/ab_pressure_suite.sh
+```
+
+#### 远程服务器 A/B 梯度压测
+
+远程模式用于在服务器环境中同时完成 **A/B 对照** 和 **梯度压力测试**。本机只负责发请求和保存结果，服务器负责运行后端、MySQL、Redis、RabbitMQ。
+
+每个压力档仍然严格执行：
+
+1. 服务器切换到基线分支；
+2. 服务器构建并重启后端；
+3. 本机发起 A 组预热和正式轮次；
+4. 服务器切换到 `cleanup-bench-review`；
+5. 服务器构建并重启后端；
+6. 本机发起 B 组预热和正式轮次；
+7. 生成该压力档 A/B comparison。
+
+执行前需要保证服务器项目已存在，并且三个 baseline 分支包含最新测试基础设施提交，否则远程 checkout 后可能缺少脚本或压测环境开关。
+
+示例：远程缓存 A/B 梯度。
+
+```bash
+AB_BACKEND_MODE=remote \
+REMOTE_SSH=tecent_server \
+REMOTE_PROJECT_DIR=/home/ubuntu/JuPin \
+BASE_URL=http://124.221.242.32:8080 \
+TESTS=cache \
+AB_ROUNDS=3 \
+AB_WARMUP=1 \
+AB_RESET_EACH_ROUND=true \
+AB_CURL_MAX_TIME=30 \
+CACHE_LEVELS=100:10:1,300:30:1,1000:100:1,3000:200:1 \
+bash Test/ab/ab_pressure_suite.sh
+```
+
+其中 `CACHE_LEVELS` 采用 `用户档:并发档:业务参数` 格式。上例表示依次运行：
+
+- 100 请求 / 10 并发 / `poolId=1`
+- 300 请求 / 30 并发 / `poolId=1`
+- 1000 请求 / 100 并发 / `poolId=1`
+- 3000 请求 / 200 并发 / `poolId=1`
+
+示例：远程完整三项 A/B 梯度。
+
+```bash
+AB_BACKEND_MODE=remote \
+REMOTE_SSH=tecent_server \
+REMOTE_PROJECT_DIR=/home/ubuntu/JuPin \
+BASE_URL=http://124.221.242.32:8080 \
+TESTS=oversell,idempotent,cache \
+AB_ROUNDS=3 \
+AB_WARMUP=1 \
+AB_RESET_EACH_ROUND=true \
+AB_CURL_MAX_TIME=30 \
+bash Test/ab/ab_pressure_suite.sh
+```
+
+正式高压不修改脚本默认值，而是在执行命令中传入档位。例如：
+
+```bash
+AB_BACKEND_MODE=remote \
+REMOTE_SSH=tecent_server \
+REMOTE_PROJECT_DIR=/home/ubuntu/JuPin \
+BASE_URL=http://124.221.242.32:8080 \
+TESTS=cache \
+AB_ROUNDS=3 \
+AB_WARMUP=1 \
+AB_RESET_EACH_ROUND=true \
+AB_CURL_MAX_TIME=30 \
+CACHE_LEVELS=1000:100:1,2000:200:1,5000:300:1,10000:500:1 \
+bash Test/ab/ab_pressure_suite.sh
+```
+
+远程模式相关变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `AB_BACKEND_MODE` | `local` | 设置为 `remote` 后启用远程 A/B 编排 |
+| `REMOTE_SSH` | 空 | SSH Host 别名，例如 `tecent_server` |
+| `REMOTE_PROJECT_DIR` | `~/JuPin` | 服务器项目根目录；命令行建议写 `/home/ubuntu/JuPin`，或写成 `'~/JuPin'` 避免被本机 shell 展开 |
+| `REMOTE_COMPOSE_DIR` | `$REMOTE_PROJECT_DIR/jupin` | 服务器 docker-compose 所在目录 |
+| `REMOTE_COMPOSE_CMD` | `sudo docker-compose` | 服务器 compose 命令 |
+| `REMOTE_DOCKER_CMD` | `sudo docker` | 服务器 docker 命令 |
+| `REMOTE_MYSQL_CONTAINER` | `jp-mysql` | 服务器 MySQL 容器名 |
+| `REMOTE_REDIS_CONTAINER` | `jp-redis` | 服务器 Redis 容器名 |
+| `REMOTE_MYSQL_PASSWORD` | `root` | 服务器 MySQL root 密码 |
+| `REMOTE_MYSQL_DATABASE` | `script_murder_carpool` | 压测数据库名 |
+
+远程构建时脚本会写入临时 compose 覆盖文件 `/tmp/jupin-ab-compose.yml`，用于关闭 SQL 明细日志、关闭后台匹配任务、限制 JVM 内存，降低压测噪声。
 
 ### 协议细节
 

@@ -21,6 +21,7 @@ AB_RESULTS_DIR="${AB_RESULTS_DIR:-$ROOT_DIR/Test/ab_results}"
 AB_BASELINE_BRANCH="${AB_BASELINE_BRANCH:-}"     # set per test
 AB_OPTIMIZED_BRANCH="${AB_OPTIMIZED_BRANCH:-cleanup-bench-review}"
 AB_RESET_EACH_ROUND="${AB_RESET_EACH_ROUND:-true}"
+AB_BACKEND_MODE="${AB_BACKEND_MODE:-local}"      # local | remote
 AB_AUTO_BACKEND="${AB_AUTO_BACKEND:-false}"
 AB_MAVEN_CMD="${AB_MAVEN_CMD:-/Applications/IntelliJ IDEA.app/Contents/plugins/maven/lib/maven3/bin/mvn}"
 AB_JAVA_HOME="${AB_JAVA_HOME:-}"
@@ -28,10 +29,38 @@ AB_BACKEND_JAR="${AB_BACKEND_JAR:-$ROOT_DIR/jupin/jupin-server/target/jupin-serv
 AB_BACKEND_PID_FILE="${AB_BACKEND_PID_FILE:-/tmp/jupin_ab_backend.pid}"
 AB_BACKEND_LOG_DIR="${AB_BACKEND_LOG_DIR:-$AB_RESULTS_DIR/backend_logs}"
 AB_CURL_MAX_TIME="${AB_CURL_MAX_TIME:-15}"
+REMOTE_SSH="${REMOTE_SSH:-}"
+REMOTE_PROJECT_DIR="${REMOTE_PROJECT_DIR:-~/JuPin}"
+REMOTE_COMPOSE_DIR="${REMOTE_COMPOSE_DIR:-$REMOTE_PROJECT_DIR/jupin}"
+REMOTE_COMPOSE_CMD="${REMOTE_COMPOSE_CMD:-sudo docker-compose}"
+REMOTE_COMPOSE_OVERRIDE="${REMOTE_COMPOSE_OVERRIDE:-/tmp/jupin-ab-compose.yml}"
+REMOTE_APP_SERVICE="${REMOTE_APP_SERVICE:-app}"
+REMOTE_MYSQL_CONTAINER="${REMOTE_MYSQL_CONTAINER:-jp-mysql}"
+REMOTE_REDIS_CONTAINER="${REMOTE_REDIS_CONTAINER:-jp-redis}"
+REMOTE_MYSQL_USER="${REMOTE_MYSQL_USER:-root}"
+REMOTE_MYSQL_PASSWORD="${REMOTE_MYSQL_PASSWORD:-root}"
+REMOTE_MYSQL_DATABASE="${REMOTE_MYSQL_DATABASE:-script_murder_carpool}"
+REMOTE_DOCKER_CMD="${REMOTE_DOCKER_CMD:-sudo docker}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 LABEL="${LABEL:-ab}"
 
 mkdir -p "$AB_RESULTS_DIR"
+
+normalize_remote_paths() {
+    if [[ "$AB_BACKEND_MODE" != "remote" ]]; then
+        return
+    fi
+
+    local local_home="${HOME%/}"
+    if [[ "$REMOTE_PROJECT_DIR" == "$local_home/"* ]]; then
+        REMOTE_PROJECT_DIR="~/${REMOTE_PROJECT_DIR#"$local_home"/}"
+    fi
+    if [[ "$REMOTE_COMPOSE_DIR" == "$local_home/"* ]]; then
+        REMOTE_COMPOSE_DIR="~/${REMOTE_COMPOSE_DIR#"$local_home"/}"
+    fi
+}
+
+normalize_remote_paths
 
 # ========== UTILITIES ==========
 
@@ -47,10 +76,36 @@ stddev_from_file() {
     }' "$file"
 }
 
+remote_required() {
+    if [[ -z "$REMOTE_SSH" ]]; then
+        echo "ERROR: AB_BACKEND_MODE=remote requires REMOTE_SSH." >&2
+        exit 1
+    fi
+}
+
+remote_exec() {
+    remote_required
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_SSH" "$@"
+}
+
+remote_write_compose_override() {
+    remote_required
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_SSH" "cat > '$REMOTE_COMPOSE_OVERRIDE' <<'EOF'
+services:
+  app:
+    environment:
+      JAVA_TOOL_OPTIONS: \"-Xms256m -Xmx1024m -XX:+UseG1GC\"
+      MYBATIS_PLUS_CONFIGURATION_LOG_IMPL: org.apache.ibatis.logging.nologging.NoLoggingImpl
+      JUPIN_MATCH_ENABLED: \"false\"
+EOF"
+}
+
 # Prompt user to rebuild and restart backend after branch switch
 wait_for_backend() {
     local branch="$1"
-    if [[ "$AB_AUTO_BACKEND" == "true" ]]; then
+    if [[ "$AB_BACKEND_MODE" == "remote" ]]; then
+        remote_build_and_restart_backend "$branch"
+    elif [[ "$AB_AUTO_BACKEND" == "true" ]]; then
         build_and_restart_backend "$branch"
     else
         echo ""
@@ -74,7 +129,10 @@ wait_for_backend() {
         sleep 2
     done
     if [[ "$ok" != "1" ]]; then
-        if [[ "$AB_AUTO_BACKEND" == "true" ]]; then
+        if [[ "$AB_BACKEND_MODE" == "remote" ]]; then
+            echo "Remote backend log tail:" >&2
+            remote_exec "cd $REMOTE_COMPOSE_DIR && $REMOTE_COMPOSE_CMD -f docker-compose.yml -f '$REMOTE_COMPOSE_OVERRIDE' logs --tail=80 '$REMOTE_APP_SERVICE'" >&2 || true
+        elif [[ "$AB_AUTO_BACKEND" == "true" ]]; then
             echo "Backend log tail:" >&2
             tail -80 "$AB_BACKEND_LOG_DIR/${RUN_ID}_${branch}.log" 2>/dev/null || true
         fi
@@ -82,6 +140,21 @@ wait_for_backend() {
         exit 1
     fi
     echo "Backend is up."
+}
+
+remote_build_and_restart_backend() {
+    local branch="$1"
+    echo ""
+    echo "=============================================="
+    echo "REMOTE BRANCH READY: $branch"
+    echo "  SSH:        $REMOTE_SSH"
+    echo "  PROJECT:    $REMOTE_PROJECT_DIR"
+    echo "  COMPOSE:    $REMOTE_COMPOSE_DIR"
+    echo "  OVERRIDE:   $REMOTE_COMPOSE_OVERRIDE"
+    echo "=============================================="
+
+    remote_write_compose_override
+    remote_exec "cd $REMOTE_COMPOSE_DIR || exit 1; $REMOTE_DOCKER_CMD rm -f jp-app >/dev/null 2>&1 || true; $REMOTE_COMPOSE_CMD -f docker-compose.yml -f '$REMOTE_COMPOSE_OVERRIDE' up -d --build '$REMOTE_APP_SERVICE'"
 }
 
 resolve_java_home() {
@@ -149,7 +222,11 @@ build_and_restart_backend() {
 switch_branch() {
     local branch="$1"
     echo "Switching to branch: $branch"
-    git -C "$ROOT_DIR" checkout "$branch"
+    if [[ "$AB_BACKEND_MODE" == "remote" ]]; then
+        remote_exec "cd $REMOTE_PROJECT_DIR && git checkout '$branch'"
+    else
+        git -C "$ROOT_DIR" checkout "$branch"
+    fi
 }
 
 reset_test_context() {
@@ -167,8 +244,20 @@ reset_state_if_needed() {
 
     echo ""
     echo "===== RESET STATE: $round_label ====="
-    bash "$SCRIPT_DIR/reset_state.sh"
+    if [[ "$AB_BACKEND_MODE" == "remote" ]]; then
+        remote_reset_state
+    else
+        bash "$SCRIPT_DIR/reset_state.sh"
+    fi
     reset_test_context
+}
+
+remote_reset_state() {
+    remote_exec "cd $REMOTE_PROJECT_DIR && \
+        $REMOTE_DOCKER_CMD exec -i '$REMOTE_MYSQL_CONTAINER' mysql -u'$REMOTE_MYSQL_USER' -p'$REMOTE_MYSQL_PASSWORD' --default-character-set=utf8mb4 < jupin/sql/init.sql && \
+        $REMOTE_DOCKER_CMD exec -i '$REMOTE_MYSQL_CONTAINER' mysql -u'$REMOTE_MYSQL_USER' -p'$REMOTE_MYSQL_PASSWORD' --default-character-set=utf8mb4 '$REMOTE_MYSQL_DATABASE' < seed-data.sql && \
+        $REMOTE_DOCKER_CMD exec '$REMOTE_REDIS_CONTAINER' redis-cli FLUSHDB >/dev/null"
+    echo "remote_state_reset_done"
 }
 
 # Run a single A/B round. Returns 0 on success.
