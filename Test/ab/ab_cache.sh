@@ -7,12 +7,31 @@ source "$SCRIPT_DIR/ab_common.sh"
 # ========== CONFIG ==========
 REQUESTS="${REQUESTS:-300}"
 CONCURRENCY="${CONCURRENCY:-30}"
+# POOL_ID is kept for compatibility with CACHE_LEVELS' third field. If it is
+# different from CACHE_EXISTING_POOL_ID, it is treated as the non-existent ID base.
 POOL_ID="${POOL_ID:-1}"
+CACHE_EXISTING_POOL_ID="${CACHE_EXISTING_POOL_ID:-1}"
 SCENARIO="cache"
-MIXED_NONEXIST_IDS=(999998001 999998002 999998003 999998004 999998005 999998006 999998007 999998008 999998009 999998010)
-REPEAT_NONEXIST_IDS=(999999001 999999002 999999003 999999004 999999005 999999006 999999007 999999008 999999009 999999010)
-CACHE_UNIQUE_BASE="${CACHE_UNIQUE_BASE:-900000000}"
+CACHE_NONEXIST_BASE="${CACHE_NONEXIST_BASE:-}"
+if [[ -z "$CACHE_NONEXIST_BASE" ]]; then
+    if [[ "$POOL_ID" =~ ^[0-9]+$ && "$POOL_ID" != "$CACHE_EXISTING_POOL_ID" ]]; then
+        CACHE_NONEXIST_BASE="$POOL_ID"
+    else
+        CACHE_NONEXIST_BASE="999999001"
+    fi
+fi
+if ! [[ "$CACHE_NONEXIST_BASE" =~ ^[0-9]+$ ]]; then
+    echo "CACHE_NONEXIST_BASE must be numeric, got: $CACHE_NONEXIST_BASE" >&2
+    exit 1
+fi
+CACHE_UNIQUE_BASE="${CACHE_UNIQUE_BASE:-$((CACHE_NONEXIST_BASE + 1000000))}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-jp-redis}"
+MIXED_NONEXIST_IDS=()
+REPEAT_NONEXIST_IDS=()
+for offset in $(seq 0 9); do
+    MIXED_NONEXIST_IDS+=("$((CACHE_NONEXIST_BASE + 1000 + offset))")
+    REPEAT_NONEXIST_IDS+=("$((CACHE_NONEXIST_BASE + offset))")
+done
 
 # ========== HELPERS ==========
 fetch_pool() {
@@ -86,7 +105,11 @@ count_null_cache_keys() {
     local count=0
     local id val
     for id in "$@"; do
-        val=$(docker exec "$REDIS_CONTAINER" redis-cli GET "pool:detail:${id}" 2>/dev/null | tr -d '\r' || true)
+        if [[ "${AB_BACKEND_MODE:-local}" == "remote" ]]; then
+            val=$(remote_exec "$REMOTE_DOCKER_CMD exec '$REMOTE_REDIS_CONTAINER' redis-cli GET 'pool:detail:${id}'" 2>/dev/null | tr -d '\r' || true)
+        else
+            val=$(docker exec "$REDIS_CONTAINER" redis-cli GET "pool:detail:${id}" 2>/dev/null | tr -d '\r' || true)
+        fi
         if [[ "$val" == "__NULL__" ]]; then
             count=$((count + 1))
         fi
@@ -95,12 +118,12 @@ count_null_cache_keys() {
 }
 
 # ========== ID GENERATORS ==========
-gen_existing() { echo "$POOL_ID"; }
+gen_existing() { echo "$CACHE_EXISTING_POOL_ID"; }
 
 gen_mixed() {
     local i=$1
     if (( i % 2 == 0 )); then
-        echo "$POOL_ID"
+        echo "$CACHE_EXISTING_POOL_ID"
     else
         local idx=$(( (i / 2) % ${#MIXED_NONEXIST_IDS[@]} ))
         echo "${MIXED_NONEXIST_IDS[$idx]}"
@@ -124,7 +147,7 @@ run_cache_round() {
     mkdir -p "$results"
 
     echo "===== CACHE ROUND: $AB_ROUND_LABEL ====="
-    echo "[cache] requests=$REQUESTS concurrency=$CONCURRENCY pool_id=$POOL_ID unique_base=$CACHE_UNIQUE_BASE"
+    echo "[cache] requests=$REQUESTS concurrency=$CONCURRENCY existing_pool_id=$CACHE_EXISTING_POOL_ID nonexist_base=$CACHE_NONEXIST_BASE unique_base=$CACHE_UNIQUE_BASE"
 
     echo "--- [1/5] Happy path (100% existing ID) ---"
     run_cache_sub "happy" gen_existing happy

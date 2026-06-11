@@ -15,13 +15,13 @@ REMOTE_COMPOSE_DIR="${REMOTE_COMPOSE_DIR:-$REMOTE_PROJECT_DIR/jupin}"
 # Level format:
 #   oversell:   userCount:concurrency:maxMembers
 #   idempotent: requestCount:concurrency
-#   cache:      requestCount:concurrency:poolId
+#   cache:      requestCount:concurrency:nonExistBase
 #
 # The first field is the business/user scale for this pressure level. High-pressure
 # levels should be passed by command line instead of hard-coded here.
 OVERSELL_LEVELS="${OVERSELL_LEVELS:-20:10:3,50:25:3,100:50:3,200:100:3}"
 IDEMPOTENT_LEVELS="${IDEMPOTENT_LEVELS:-50:10,100:25,200:50,500:100}"
-CACHE_LEVELS="${CACHE_LEVELS:-300:30:1,1000:100:1,3000:200:1,10000:300:1}"
+CACHE_LEVELS="${CACHE_LEVELS:-300:30:999999001,1000:100:999999001,3000:200:999999001,10000:300:999999001}"
 
 normalize_remote_paths() {
     if [[ "${AB_BACKEND_MODE:-local}" != "remote" ]]; then
@@ -121,13 +121,13 @@ run_idempotent_levels() {
 }
 
 run_cache_levels() {
-    local level=1 spec requests concurrency pool_id
+    local level=1 spec requests concurrency nonexist_base
     IFS=',' read -r -a specs <<< "$CACHE_LEVELS"
     for spec in "${specs[@]}"; do
-        IFS=':' read -r requests concurrency pool_id <<< "$spec"
+        IFS=':' read -r requests concurrency nonexist_base <<< "$spec"
         echo ""
         echo "============================================================"
-        echo "PRESSURE LEVEL cache L${level}: request_count=${requests}, concurrency=${concurrency}, pool_id=${pool_id}"
+        echo "PRESSURE LEVEL cache L${level}: request_count=${requests}, concurrency=${concurrency}, existing_pool_id=${CACHE_EXISTING_POOL_ID:-1}, nonexist_base=${nonexist_base}"
         echo "============================================================"
         RUN_ID="${BASE_RUN_ID}_cache_L${level}" \
         TESTS=cache \
@@ -149,7 +149,8 @@ run_cache_levels() {
         BASE_URL="${BASE_URL:-http://localhost:8080}" \
         CACHE_REQUESTS="$requests" \
         CACHE_CONCURRENCY="$concurrency" \
-        POOL_ID="$pool_id" \
+        CACHE_EXISTING_POOL_ID="${CACHE_EXISTING_POOL_ID:-1}" \
+        CACHE_NONEXIST_BASE="$nonexist_base" \
         bash "$SCRIPT_DIR/ab_suite.sh"
         level=$((level + 1))
     done
