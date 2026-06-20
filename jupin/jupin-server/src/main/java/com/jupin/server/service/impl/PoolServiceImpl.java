@@ -58,7 +58,8 @@ public class PoolServiceImpl implements PoolService {
     private final SimpMessagingTemplate messagingTemplate;
     private final TimeoutProducer timeoutProducer;
 
-    // Recommend scoring weights
+    // 推荐列表的各项打分权重。
+    // 城市、剧本类型、时间段等越匹配，推荐分越高。
     private static final int SCORE_CITY = 50;
     private static final int SCORE_SCRIPT_TYPE = 35;
     private static final int SCORE_TIME_SLOT = 25;
@@ -118,8 +119,10 @@ public class PoolServiceImpl implements PoolService {
                 .deposit(request.getDeposit())
                 .joinType(request.getJoinType())
                 .dmId(resolveInitialDmId(type, userId, request.getDmId()))
-                .currentMembers(0)
-                .status(PoolStatus.OPEN)
+                .currentMembers(type == 0 ? 1 : 0)
+                .status(type == 0 && request.getMaxMembers() != null && request.getMaxMembers() <= 1
+                        ? PoolStatus.FULL
+                        : PoolStatus.OPEN)
                 .build();
         poolMapper.insert(pool);
 
@@ -139,20 +142,30 @@ public class PoolServiceImpl implements PoolService {
 
     @Override
     public CarPool getDetail(Long poolId) {
+        // 拼出组局详情缓存 Key：同一个组局只会落到同一个 Redis Key 上。
         String cacheKey = RedisKeyConstant.POOL_DETAIL_PREFIX + poolId;
+        // 先查 Redis，这是 Cache Aside 的读路径：缓存命中直接返回，缓存未命中再查 MySQL。
         String cached = stringRedis.opsForValue().get(cacheKey);
+        // 如果命中的是空值缓存，说明这个不存在的 poolId 最近已经查过一次。
+        // 这里直接返回“不存在”，避免大量无效 ID 每次都穿透到数据库。
         if (RedisKeyConstant.CACHE_NULL.equals(cached)) {
             throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         }
+        // 如果 Redis 里有正常 JSON 字符串，直接反序列化成 CarPool 返回，不再访问数据库。
         if (StringUtils.hasText(cached)) {
             return JSONUtil.toBean(cached, CarPool.class);
         }
 
+        // Redis 未命中时再查 MySQL，MySQL 仍然是组局详情的最终数据源。
         CarPool pool = poolMapper.selectById(poolId);
         if (pool == null) {
+            // 数据库也查不到时，写入一个短 TTL 的空值缓存。
+            // 这样同一个不存在 ID 在 60 秒内再次被查询时，会被 Redis 拦截，不会反复打到 MySQL。
             stringRedis.opsForValue().set(cacheKey, RedisKeyConstant.CACHE_NULL, POOL_DETAIL_NULL_TTL_SECONDS, TimeUnit.SECONDS);
             throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
         }
+        // 查到真实数据后写入 Redis。
+        // TTL 使用“固定 10 分钟 + 0~119 秒随机偏移”，避免大量热点 Key 在同一秒集中失效。
         stringRedis.opsForValue().set(cacheKey, JSONUtil.toJsonStr(pool),
                 POOL_DETAIL_TTL_MINUTES * 60 + new Random().nextInt(120), TimeUnit.SECONDS);
         return pool;
@@ -180,7 +193,8 @@ public class PoolServiceImpl implements PoolService {
             return pageResult.getRecords();
         }
 
-        // Recommend mode: fetch up to MAX_RECOMMEND_FETCH rows, score in memory, sort, page
+        // 推荐模式：先最多取 MAX_RECOMMEND_FETCH 条候选组局。
+        // 然后在内存里根据用户偏好打分、排序、分页。
         queryWrapper.last("LIMIT " + MAX_RECOMMEND_FETCH);
         List<CarPool> pools = poolMapper.selectList(queryWrapper);
         if (pools.isEmpty()) return pools;
@@ -228,45 +242,82 @@ public class PoolServiceImpl implements PoolService {
     @Override
     @Transactional
     public void join(Long userId, Long poolId) {
+        // 按 poolId 生成分布式锁 Key：同一个组局的加入请求会抢同一把锁。
+        // 不同组局的 lockKey 不同，所以它们可以并发加入，互不影响。
         String lockKey = RedisKeyConstant.POOL_LOCK_PREFIX + poolId;
+        // 从 Redisson 拿到 RLock 对象；真正加锁时才会访问 Redis。
         RLock lock = redisson.getLock(lockKey);
         try {
+            // 最多等待 3 秒获取锁，拿到锁后最多持有 10 秒。
+            // 等不到锁说明当前组局加入请求太密集，直接返回系统繁忙，避免线程一直堆积。
             if (!lock.tryLock(3, 10, TimeUnit.SECONDS)) {
                 throw new BaseException(ErrorConstant.SYSTEM_BUSY);
             }
+            // 拿到锁后重新读取组局数据。
+            // 因为加锁前读到的人数可能已经过期，锁内读取才能基于最新座位数判断。
             CarPool pool = poolMapper.selectById(poolId);
+            // 组局不存在时终止加入流程。
             if (pool == null) throw new BaseException(ErrorConstant.POOL_NOT_FOUND);
+            // 只有开放中的组局允许加入，已取消、已成团、已结束的组局都不能再占座。
             if (pool.getStatus() != PoolStatus.OPEN) throw new BaseException(ErrorConstant.POOL_CANNOT_JOIN);
+            // 当前已占用名额达到最大人数时拒绝加入，避免业务层明显超员。
             if (pool.getCurrentMembers() >= pool.getMaxMembers()) throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
 
+            // 查询当前用户在这个组局里是否已经有成员记录。
+            // 这样可以区分“第一次加入”和“之前退出后重新加入”。
             PoolMember existing = memberMapper.selectOne(new QueryWrapper<PoolMember>()
                     .eq(DbFieldConstant.POOL_ID, poolId).eq(DbFieldConstant.USER_ID, userId));
             if (existing != null) {
+                // JOINED、PENDING_PAYMENT、PENDING_REVIEW 都表示用户已经占用一个名额。
+                // 这些状态下重复点击加入，需要直接拒绝，避免重复占用名额或重复申请。
                 if (existing.getStatus() == MemberStatus.JOINED
                         || existing.getStatus() == MemberStatus.PENDING_PAYMENT
                         || existing.getStatus() == MemberStatus.PENDING_REVIEW) {
                     throw new BaseException(ErrorConstant.ALREADY_IN_POOL_OR_PENDING);
                 }
+                // 加入阶段就占用名额。
+                // 这条 SQL 在 MySQL 内部完成 current_members + 1 和 current_members < max_members 判断。
+                occupyPoolSlot(poolId);
+                // 历史记录存在但不是有效占位状态时，复用原成员记录。
+                // 免审核局进入待支付，审核局进入待审核。
                 int newStatus = pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW;
                 existing.setStatus(newStatus);
+                // 更新加入时间，表示这是一次新的加入动作。
                 existing.setJoinTime(LocalDateTime.now());
+                // 清空离开时间，避免旧的退出时间影响当前成员状态展示。
                 existing.setLeaveTime(null);
+                // 按主键更新成员记录，保留原来的成员 id。
                 memberMapper.updateById(existing);
             } else {
+                // 加入阶段就占用名额。
+                // 如果并发下名额已满，这里会更新 0 行并抛出已满异常。
+                occupyPoolSlot(poolId);
+                // 用户从未加入过这个组局时，新建成员记录。
                 PoolMember member = PoolMember.builder()
+                        // 关联当前组局。
                         .poolId(poolId)
+                        // 关联当前用户。
                         .userId(userId)
+                        // 默认普通玩家角色，后续可以再选择具体剧本角色。
                         .role(0)
+                        // 根据组局加入方式决定初始状态：免审核则待支付，需审核则待审核。
                         .status(pool.getJoinType() == 1 ? MemberStatus.PENDING_PAYMENT : MemberStatus.PENDING_REVIEW)
+                        // 记录加入动作发生时间。
                         .joinTime(LocalDateTime.now())
                         .build();
+                // 插入成员表，完成业务上的“加入/申请加入”。
                 memberMapper.insert(member);
             }
+            // 成员状态变化后删除组局详情缓存。
+            // 下一次读取会重新查 MySQL 并回填 Redis，避免用户看到旧的座位信息。
             evictPoolDetail(poolId);
         } catch (InterruptedException e) {
+            // tryLock 等待期间线程被中断时，恢复中断标记，交给上层线程池感知。
             Thread.currentThread().interrupt();
             throw new BaseException(ErrorConstant.SYSTEM_BUSY);
         } finally {
+            // 解锁前确认这把锁仍然属于当前线程。
+            // 如果锁已经过期并被其他线程拿到，当前线程不能误删别人的锁。
             if (lock.isHeldByCurrentThread()) lock.unlock();
         }
     }
@@ -293,19 +344,14 @@ public class PoolServiceImpl implements PoolService {
         if (member == null) throw new BaseException(ErrorConstant.NOT_IN_POOL);
 
         if (pool.getStatus() == PoolStatus.OPEN || pool.getStatus() == PoolStatus.FULL) {
-            boolean joined = member.getStatus() == MemberStatus.JOINED;
+            boolean occupied = isOccupyingMember(member.getStatus());
             member.setStatus(MemberStatus.LEFT);
             member.setLeaveTime(LocalDateTime.now());
             memberMapper.updateById(member);
 
-            if (joined) {
-                pool.setCurrentMembers(Math.max(0, pool.getCurrentMembers() - 1));
-                poolMapper.updateById(pool);
+            if (occupied) {
+                releasePoolSlot(poolId);
                 evictPoolDetail(poolId);
-
-                if (pool.getStatus() == PoolStatus.FULL) {
-                    stateMachine.rollbackToOpen(poolId);
-                }
             }
         } else if (pool.getStatus() == PoolStatus.COMPLETED) {
             long recentLeftCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
@@ -329,6 +375,38 @@ public class PoolServiceImpl implements PoolService {
         }
     }
 
+    private void occupyPoolSlot(Long poolId) {
+        int rows = poolMapper.update(null, new UpdateWrapper<CarPool>()
+                .setSql("current_members = current_members + 1")
+                .eq(DbFieldConstant.ID, poolId)
+                .eq(DbFieldConstant.STATUS, PoolStatus.OPEN)
+                .apply("current_members < max_members"));
+        if (rows == 0) {
+            throw new BaseException(ErrorConstant.POOL_ALREADY_FULL);
+        }
+        poolMapper.update(null, new UpdateWrapper<CarPool>()
+                .set(DbFieldConstant.STATUS, PoolStatus.FULL)
+                .eq(DbFieldConstant.ID, poolId)
+                .eq(DbFieldConstant.STATUS, PoolStatus.OPEN)
+                .apply("current_members >= max_members"));
+    }
+
+    private void releasePoolSlot(Long poolId) {
+        poolMapper.update(null, new UpdateWrapper<CarPool>()
+                .setSql("current_members = GREATEST(current_members - 1, 0)")
+                .eq(DbFieldConstant.ID, poolId)
+                .in(DbFieldConstant.STATUS, PoolStatus.OPEN, PoolStatus.FULL)
+                .apply("current_members > 0"));
+        stateMachine.rollbackToOpen(poolId);
+    }
+
+    private boolean isOccupyingMember(Integer status) {
+        return status != null
+                && (status == MemberStatus.JOINED
+                || status == MemberStatus.PENDING_PAYMENT
+                || status == MemberStatus.PENDING_REVIEW);
+    }
+
     @Override
     @Transactional
     public void approve(Long userId, Long poolId, Long targetUserId) {
@@ -349,9 +427,12 @@ public class PoolServiceImpl implements PoolService {
         if (pool == null || !pool.getOwnerId().equals(userId)) {
             throw new BaseException(ErrorConstant.NO_PERMISSION_TO_REVIEW);
         }
-        memberMapper.update(null, new UpdateWrapper<PoolMember>()
+        int rows = memberMapper.update(null, new UpdateWrapper<PoolMember>()
                 .set("status", MemberStatus.REJECTED)
                 .eq("pool_id", poolId).eq("user_id", targetUserId).eq("status", MemberStatus.PENDING_REVIEW));
+        if (rows > 0) {
+            releasePoolSlot(poolId);
+        }
         evictPoolDetail(poolId);
     }
 

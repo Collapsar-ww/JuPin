@@ -18,6 +18,9 @@ node_modules/
 .claude/
 .code
 
+# Local interview prep
+面试/
+
 # OS
 .DS_Store
 Thumbs.db

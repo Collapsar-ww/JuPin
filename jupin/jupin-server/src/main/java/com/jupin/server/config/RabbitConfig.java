@@ -60,48 +60,69 @@ public class RabbitConfig {
 
     @Bean
     public DirectExchange timeoutDelayExchange() {
+        // 超时消息先发送到延迟交换机。
+        // 该交换机负责把不同类型的超时消息路由到各自的延迟队列。
         return new DirectExchange(EXCHANGE_TIMEOUT_DELAY);
     }
 
     @Bean
     public DirectExchange timeoutDlxExchange() {
+        // 死信交换机。
+        // 延迟队列里的消息 TTL 到期后，会被 RabbitMQ 投递到这个交换机。
         return new DirectExchange(EXCHANGE_TIMEOUT_DLX);
     }
 
     @Bean
     public Queue timeoutOrderDepositDelayQueue() {
+        // 押金支付超时延迟队列。
+        // 消息在这里等待到 TTL 到期，之后进入统一超时消费队列。
         return timeoutDelayQueue(QUEUE_TIMEOUT_ORDER_DEPOSIT_DELAY);
     }
 
     @Bean
     public Queue timeoutOrderFinalDelayQueue() {
+        // 尾款支付超时延迟队列。
+        // 与押金分队列存放，便于不同业务设置不同 TTL 和路由。
         return timeoutDelayQueue(QUEUE_TIMEOUT_ORDER_FINAL_DELAY);
     }
 
     @Bean
     public Queue timeoutPoolStartDelayQueue() {
+        // 组局开始时间超时延迟队列。
+        // 用于到开局时间仍无人加入时自动取消组局。
         return timeoutDelayQueue(QUEUE_TIMEOUT_POOL_START_DELAY);
     }
 
     @Bean
     public Queue timeoutConfirmDelayQueue() {
+        // 成团确认和结束确认的延迟队列。
+        // 确认窗口到期后由消费者做兜底判断。
         return timeoutDelayQueue(QUEUE_TIMEOUT_CONFIRM_DELAY);
     }
 
     private Queue timeoutDelayQueue(String queueName) {
+        // 创建一个持久化延迟队列。
+        // 队列本身不直接被业务消费者监听，只负责暂存带 TTL 的消息。
         return QueueBuilder.durable(queueName)
+                // 指定消息过期后的死信交换机。
+                // TTL 到期时，RabbitMQ 会把消息转发到 EXCHANGE_TIMEOUT_DLX。
                 .deadLetterExchange(EXCHANGE_TIMEOUT_DLX)
+                // 指定死信路由键。
+                // 所有超时消息到期后统一路由到 timeout.queue。
                 .deadLetterRoutingKey(ROUTING_TIMEOUT)
                 .build();
     }
 
     @Bean
     public Queue timeoutQueue() {
+        // 统一超时消费队列。
+        // 消费者只监听这个队列，业务处理逻辑集中在 TimeoutConsumer。
         return QueueBuilder.durable(QUEUE_TIMEOUT).build();
     }
 
     @Bean
     public Binding timeoutOrderDepositDelayBinding() {
+        // 把押金超时路由键绑定到押金延迟队列。
         return BindingBuilder.bind(timeoutOrderDepositDelayQueue())
                 .to(timeoutDelayExchange())
                 .with(ROUTING_TIMEOUT_ORDER_DEPOSIT_DELAY);
@@ -109,6 +130,7 @@ public class RabbitConfig {
 
     @Bean
     public Binding timeoutOrderFinalDelayBinding() {
+        // 把尾款超时路由键绑定到尾款延迟队列。
         return BindingBuilder.bind(timeoutOrderFinalDelayQueue())
                 .to(timeoutDelayExchange())
                 .with(ROUTING_TIMEOUT_ORDER_FINAL_DELAY);
@@ -116,6 +138,7 @@ public class RabbitConfig {
 
     @Bean
     public Binding timeoutPoolStartDelayBinding() {
+        // 把组局开始超时路由键绑定到组局开始延迟队列。
         return BindingBuilder.bind(timeoutPoolStartDelayQueue())
                 .to(timeoutDelayExchange())
                 .with(ROUTING_TIMEOUT_POOL_START_DELAY);
@@ -123,6 +146,7 @@ public class RabbitConfig {
 
     @Bean
     public Binding timeoutConfirmDelayBinding() {
+        // 把确认超时路由键绑定到确认延迟队列。
         return BindingBuilder.bind(timeoutConfirmDelayQueue())
                 .to(timeoutDelayExchange())
                 .with(ROUTING_TIMEOUT_CONFIRM_DELAY);
@@ -130,6 +154,8 @@ public class RabbitConfig {
 
     @Bean
     public Binding timeoutBinding() {
+        // 把死信交换机和统一超时队列绑定起来。
+        // 各延迟队列中过期的消息最终都会进入 timeout.queue。
         return BindingBuilder.bind(timeoutQueue()).to(timeoutDlxExchange()).with(ROUTING_TIMEOUT);
     }
 }

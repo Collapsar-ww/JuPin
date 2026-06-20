@@ -129,7 +129,7 @@ CREATE TABLE `car_pool` (
   `start_time`      DATETIME      NOT NULL,
   `end_time`        DATETIME      DEFAULT NULL,
   `max_members`     INT           NOT NULL COMMENT '总需人数',
-  `current_members` INT           DEFAULT 0 COMMENT '已支付押金的正式成员数',
+  `current_members` INT           DEFAULT 0 COMMENT '已占用名额数（待支付/待审核/已加入）',
   `price`           DECIMAL(10,2) DEFAULT 0.00 COMMENT '人均总费用',
   `deposit`         DECIMAL(10,2) DEFAULT 10.00 COMMENT '预付押金（含在总费用内）',
   `dm_id`           BIGINT        DEFAULT NULL COMMENT 'DM用户ID',
