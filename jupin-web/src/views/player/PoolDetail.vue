@@ -16,12 +16,6 @@
           <el-button v-if="canJoin" type="primary" :loading="joining" @click="handleJoin">
             加入拼车
           </el-button>
-          <el-button v-if="canStartComplete" type="success" :loading="startingComplete" @click="handleStartComplete">
-            发起成团确认
-          </el-button>
-          <el-button v-if="canConfirmComplete" type="primary" :loading="confirmingComplete" @click="handleConfirmComplete">
-            我确认成团
-          </el-button>
           <el-button v-if="canStartFinish" type="success" :loading="startingFinish" @click="handleStartFinish">
             发起结束确认
           </el-button>
@@ -36,6 +30,7 @@
           </el-button>
           <el-button v-if="canCancel" type="danger" plain @click="handleCancel">取消拼车</el-button>
           <el-button v-if="canLeave" type="info" plain @click="handleLeave">退出</el-button>
+          <el-button v-if="canReview" type="primary" @click="showReviewDialog = true">去评价</el-button>
         </div>
       </div>
 
@@ -50,11 +45,6 @@
         <el-descriptions-item label="发布人">{{ pool.ownerNickname }}</el-descriptions-item>
         <el-descriptions-item label="DM">{{ pool.dmNickname || '待指定' }}</el-descriptions-item>
         <el-descriptions-item label="加入方式">{{ pool.joinType === 1 ? '自动通过' : '审核制' }}</el-descriptions-item>
-        <el-descriptions-item v-if="myMember" label="我的成团确认">
-          <el-tag size="small" :type="confirmTagType(myMember.completedConfirmed, completeConfirmStarted)">
-            {{ confirmText(myMember.completedConfirmed, completeConfirmStarted) }}
-          </el-tag>
-        </el-descriptions-item>
         <el-descriptions-item v-if="myMember" label="我的尾款">
           <el-tag size="small" :type="orderTagType(myMember.remainingOrderStatus, pool.status >= POOL_STATUS.COMPLETED)">
             {{ orderText(myMember.remainingOrderStatus, pool.status >= POOL_STATUS.COMPLETED) }}
@@ -92,13 +82,6 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="成团确认" width="110">
-          <template #default="{ row }">
-            <el-tag size="small" :type="confirmTagType(row.completedConfirmed, completeConfirmStarted)">
-              {{ confirmText(row.completedConfirmed, completeConfirmStarted) }}
-            </el-tag>
-          </template>
-        </el-table-column>
         <el-table-column label="尾款" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="orderTagType(row.remainingOrderStatus, pool.status >= POOL_STATUS.COMPLETED)">
@@ -132,6 +115,18 @@
         </el-collapse-item>
       </el-collapse>
     </el-card>
+
+    <el-dialog v-model="showReviewDialog" title="评价" width="400px">
+      <div style="margin-bottom: 12px">
+        <span style="margin-right: 8px">评分：</span>
+        <el-rate v-model="reviewScore" show-score />
+      </div>
+      <el-input v-model="reviewContent" type="textarea" :rows="3" placeholder="写下你的评价（可选）" />
+      <template #footer>
+        <el-button @click="showReviewDialog = false">取消</el-button>
+        <el-button type="primary" :loading="submittingReview" @click="submitReview">提交</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -141,8 +136,8 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getPlayerPoolDetail, joinPool, leavePool, cancelPool,
-  createOrder, payOrder, getMyOrders, startComplete, startFinish, confirmPool,
-  getChatHistory, sendChatMessage,
+  createOrder, payOrder, getMyOrders, startFinish, confirmPool,
+  getChatHistory, sendChatMessage, createReview,
 } from '../../api/player'
 import type { PoolDetail, ChatMessage, OrderItem } from '../../api/player'
 import { useAuthStore } from '../../stores/auth'
@@ -157,8 +152,6 @@ const auth = useAuthStore()
 const loading = ref(true)
 const joining = ref(false)
 const paying = ref(false)
-const startingComplete = ref(false)
-const confirmingComplete = ref(false)
 const startingFinish = ref(false)
 const confirmingFinish = ref(false)
 
@@ -169,28 +162,29 @@ const chatRef = ref<HTMLElement>()
 let refreshTimer: number | undefined
 let unsubscribePool: (() => void) | undefined
 
+const showReviewDialog = ref(false)
+const reviewScore = ref(5)
+const reviewContent = ref('')
+const submittingReview = ref(false)
+
 const isOwner = computed(() => pool.value?.ownerId === auth.user?.id)
 const isMember = computed(() => pool.value?.members.some(m => m.userId === auth.user?.id && m.status === MEMBER_STATUS.JOINED))
 const myMember = computed(() => pool.value?.members.find(m => m.userId === auth.user?.id))
 const joinedMembers = computed(() => pool.value?.members.filter(m => m.status === MEMBER_STATUS.JOINED) ?? [])
-const completeRejected = computed(() => joinedMembers.value.some(m => m.completedConfirmed === 2))
 const finishRejected = computed(() => joinedMembers.value.some(m => m.finishedConfirmed === 2))
-const completeConfirmStarted = computed(() => !!pool.value?.completedConfirmStarted || (joinedMembers.value.some(m => !!m.completedConfirmTime) && !completeRejected.value))
 const finishConfirmStarted = computed(() => !!pool.value?.finishedConfirmStarted || (joinedMembers.value.some(m => !!m.finishedConfirmTime) && !finishRejected.value))
-const isFullByCount = computed(() => !!pool.value && pool.value.currentMembers >= pool.value.maxMembers)
-
 const canJoin = computed(() => pool.value?.status === POOL_STATUS.OPEN && !pool.value?.members.some(m => m.userId === auth.user?.id))
 const canPayDeposit = computed(() => myMember.value?.status === MEMBER_STATUS.PENDING_PAYMENT)
-const canPayRemaining = computed(() => pool.value?.status === POOL_STATUS.COMPLETED && isMember.value)
+const hasPaidRemaining = computed(() => myMember.value?.remainingOrderStatus === ORDER_STATUS.PAID)
+const canPayRemaining = computed(() => pool.value?.status === POOL_STATUS.COMPLETED && isMember.value && !hasPaidRemaining.value)
 const canCancel = computed(() => isOwner.value && (pool.value?.status === POOL_STATUS.OPEN || pool.value?.status === POOL_STATUS.FULL))
 const canLeave = computed(() => {
   if (!myMember.value) return false
   return myMember.value.status < MEMBER_STATUS.LEFT && myMember.value.userId !== pool.value?.ownerId
 })
-const canStartComplete = computed(() => pool.value?.status === POOL_STATUS.FULL && isFullByCount.value && isOwner.value && !completeConfirmStarted.value)
-const canConfirmComplete = computed(() => pool.value?.status === POOL_STATUS.FULL && isFullByCount.value && isMember.value && completeConfirmStarted.value && myMember.value?.completedConfirmed === 0)
-const canStartFinish = computed(() => pool.value?.status === POOL_STATUS.COMPLETED && isOwner.value && !finishConfirmStarted.value)
-const canConfirmFinish = computed(() => pool.value?.status === POOL_STATUS.COMPLETED && isMember.value && finishConfirmStarted.value && myMember.value?.finishedConfirmed === 0)
+const canStartFinish = computed(() => pool.value?.status === POOL_STATUS.COMPLETED && isOwner.value && hasPaidRemaining.value && !finishConfirmStarted.value)
+const canConfirmFinish = computed(() => pool.value?.status === POOL_STATUS.COMPLETED && isMember.value && hasPaidRemaining.value && finishConfirmStarted.value && myMember.value?.finishedConfirmed === 0)
+const canReview = computed(() => isMember.value && pool.value?.status === POOL_STATUS.FINISHED)
 const canChat = computed(() => isMember.value && pool.value?.status !== POOL_STATUS.FINISHED && pool.value?.status !== POOL_STATUS.CANCELLED)
 
 function orderText(status: number | null | undefined, expected: boolean) {
@@ -266,34 +260,6 @@ async function handlePayRemaining() {
     }
   } finally {
     paying.value = false
-  }
-}
-
-async function handleStartComplete() {
-  startingComplete.value = true
-  try {
-    await startComplete(pool.value!.id)
-    if (pool.value) {
-      pool.value.completedConfirmStarted = true
-      pool.value.members = pool.value.members.map((member) => member.status === MEMBER_STATUS.JOINED
-        ? { ...member, completedConfirmTime: member.completedConfirmTime || new Date().toISOString(), completedConfirmed: 0 }
-        : member)
-    }
-    ElMessage.success('已发起成团确认，请通知成员确认')
-    await loadDetail()
-  } finally {
-    startingComplete.value = false
-  }
-}
-
-async function handleConfirmComplete() {
-  confirmingComplete.value = true
-  try {
-    const res = await confirmPool(pool.value!.id, true)
-    ElMessage.success(res.data.completed ? '成团确认已完成' : `已确认，当前 ${res.data.confirmedCount}/${res.data.totalCount}`)
-    await loadDetail()
-  } finally {
-    confirmingComplete.value = false
   }
 }
 
@@ -394,6 +360,25 @@ async function sendChat() {
     loadChatHistory()
   } catch {
     // handled
+  }
+}
+
+async function submitReview() {
+  submittingReview.value = true
+  try {
+    await createReview({
+      poolId: pool.value!.id,
+      targetId: pool.value!.dmId || pool.value!.ownerId,
+      type: 0,
+      score: reviewScore.value,
+      content: reviewContent.value || undefined,
+    })
+    ElMessage.success('评价已提交')
+    showReviewDialog.value = false
+  } catch {
+    // handled
+  } finally {
+    submittingReview.value = false
   }
 }
 

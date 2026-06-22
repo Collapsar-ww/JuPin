@@ -321,16 +321,6 @@ function buildTodos() {
     }
 
     if (m.memberStatus === MEMBER_STATUS.JOINED) {
-      if (m.poolStatus === POOL_STATUS.FULL && m.completedConfirmed === 0) {
-        list.push({
-          key: `confirm-${m.poolId}`,
-          type: 'confirm',
-          title: '待确认成团',
-          desc: `《${m.scriptName}》请确认拼车成功`,
-          actionText: '去确认',
-          action: () => router.push(`/player/pools/${m.poolId}`),
-        })
-      }
       if (m.poolStatus === POOL_STATUS.COMPLETED && m.finishedConfirmed === 0) {
         list.push({
           key: `finish-${m.poolId}`,

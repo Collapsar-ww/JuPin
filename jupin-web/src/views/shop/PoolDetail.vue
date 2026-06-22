@@ -13,7 +13,6 @@
           </div>
         </div>
         <div class="detail-actions">
-          <el-button v-if="canConfirmComplete" type="success" @click="handleComplete">发起完成确认</el-button>
           <el-button v-if="canStartFinish" type="success" @click="handleFinish">发起结束确认</el-button>
           <el-button v-if="canCancel" type="danger" plain @click="handleCancel">取消拼车</el-button>
         </div>
@@ -28,11 +27,6 @@
         <el-descriptions-item label="人均费用">¥{{ formatPrice(pool.price) }}</el-descriptions-item>
         <el-descriptions-item label="押金">¥{{ formatPrice(pool.deposit) }}</el-descriptions-item>
         <el-descriptions-item label="DM">{{ pool.dmNickname || '待指定' }}</el-descriptions-item>
-        <el-descriptions-item label="成团确认">
-          <el-tag size="small" :type="completeConfirmStarted ? 'warning' : 'info'">
-            {{ completeConfirmStarted ? '进行中' : '未开始' }}
-          </el-tag>
-        </el-descriptions-item>
         <el-descriptions-item label="结束确认">
           <el-tag size="small" :type="finishConfirmStarted ? 'warning' : 'info'">
             {{ finishConfirmStarted ? '进行中' : '未开始' }}
@@ -64,13 +58,6 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="成团确认" width="110">
-          <template #default="{ row }">
-            <el-tag size="small" :type="confirmTagType(row.completedConfirmed, completeConfirmStarted)">
-              {{ confirmText(row.completedConfirmed, completeConfirmStarted) }}
-            </el-tag>
-          </template>
-        </el-table-column>
         <el-table-column label="尾款" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="orderTagType(row.remainingOrderStatus, pool.status >= POOL_STATUS.COMPLETED)">
@@ -94,7 +81,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getShopPoolDetail, startCompleteShop, startFinishShop, cancelShopPool } from '../../api/shop'
+import { getShopPoolDetail, startFinishShop, cancelShopPool } from '../../api/shop'
 import type { PoolDetail } from '../../api/player'
 import { useAuthStore } from '../../stores/auth'
 import { MEMBER_STATUS, ORDER_STATUS, POOL_STATUS } from '../../constants'
@@ -112,12 +99,8 @@ let unsubscribePool: (() => void) | undefined
 
 const isOwner = computed(() => pool.value?.ownerId === auth.user?.id)
 const joinedMembers = computed(() => pool.value?.members.filter(m => m.status === MEMBER_STATUS.JOINED) ?? [])
-const completeRejected = computed(() => joinedMembers.value.some(m => m.completedConfirmed === 2))
 const finishRejected = computed(() => joinedMembers.value.some(m => m.finishedConfirmed === 2))
-const completeConfirmStarted = computed(() => !!pool.value?.completedConfirmStarted || (joinedMembers.value.some(m => !!m.completedConfirmTime) && !completeRejected.value))
 const finishConfirmStarted = computed(() => !!pool.value?.finishedConfirmStarted || (joinedMembers.value.some(m => !!m.finishedConfirmTime) && !finishRejected.value))
-const isFullByCount = computed(() => !!pool.value && pool.value.currentMembers >= pool.value.maxMembers)
-const canConfirmComplete = computed(() => isOwner.value && pool.value?.status === POOL_STATUS.FULL && isFullByCount.value && !completeConfirmStarted.value)
 const canStartFinish = computed(() => isOwner.value && pool.value?.status === POOL_STATUS.COMPLETED && !finishConfirmStarted.value)
 const canCancel = computed(() => isOwner.value && (pool.value?.status === POOL_STATUS.OPEN || pool.value?.status === POOL_STATUS.FULL))
 
@@ -157,20 +140,6 @@ async function loadDetail() {
   } finally {
     loading.value = false
   }
-}
-
-async function handleComplete() {
-  try {
-    await startCompleteShop(pool.value!.id)
-    if (pool.value) {
-      pool.value.completedConfirmStarted = true
-      pool.value.members = pool.value.members.map((member) => member.status === MEMBER_STATUS.JOINED
-        ? { ...member, completedConfirmTime: member.completedConfirmTime || new Date().toISOString(), completedConfirmed: 0 }
-        : member)
-    }
-    ElMessage.success('已发起完成确认')
-    await loadDetail()
-  } catch { /* handled */ }
 }
 
 async function handleFinish() {
