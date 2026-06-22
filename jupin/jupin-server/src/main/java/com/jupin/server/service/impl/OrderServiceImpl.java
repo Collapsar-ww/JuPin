@@ -6,6 +6,7 @@ import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.jupin.common.constant.ConfirmStatus;
 import com.jupin.common.constant.DbFieldConstant;
 import com.jupin.common.constant.ErrorConstant;
 import com.jupin.common.constant.MemberStatus;
@@ -29,6 +30,7 @@ import com.jupin.server.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -36,6 +38,7 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -47,8 +50,10 @@ public class OrderServiceImpl implements OrderService {
     private final PoolMapper poolMapper;
     private final PoolMemberMapper memberMapper;
     private final OrderStateMachine orderStateMachine;
+    private final PoolStateMachine stateMachine;
     private final StringRedisTemplate stringRedis;
     private final TimeoutProducer timeoutProducer;
+    private final SimpMessagingTemplate messagingTemplate;
     private final Snowflake snowflake = IdUtil.getSnowflake(1, 1);
     private static final long DEPOSIT_PAY_TIMEOUT_MINUTES = 15;
     private static final long FINAL_PAY_TIMEOUT_HOURS = 24;
@@ -341,6 +346,33 @@ public class OrderServiceImpl implements OrderService {
                 return;
             }
             throw new BaseException(ErrorConstant.MEMBER_STATUS_CHANGED);
+        }
+
+        // 押金支付即自动确认成团
+        memberMapper.update(null, new UpdateWrapper<PoolMember>()
+                .set("completed_confirmed", ConfirmStatus.CONFIRMED)
+                .set("completed_confirm_time", LocalDateTime.now())
+                .eq(DbFieldConstant.ID, member.getId())
+                .eq("completed_confirmed", ConfirmStatus.UNCONFIRMED));
+
+        // 当组局已满且所有名额均已支付并确认，自动推进到 COMPLETED
+        if (pool.getStatus() == PoolStatus.FULL) {
+            long totalJoined = memberMapper.selectCount(new QueryWrapper<PoolMember>()
+                    .eq(DbFieldConstant.POOL_ID, pool.getId())
+                    .eq(DbFieldConstant.STATUS, MemberStatus.JOINED));
+            if (totalJoined == pool.getMaxMembers()) {
+                long confirmedCount = memberMapper.selectCount(new QueryWrapper<PoolMember>()
+                        .eq(DbFieldConstant.POOL_ID, pool.getId())
+                        .eq(DbFieldConstant.STATUS, MemberStatus.JOINED)
+                        .eq("completed_confirmed", ConfirmStatus.CONFIRMED));
+                if (confirmedCount == totalJoined) {
+                    stateMachine.toCompleted(pool.getId());
+                    messagingTemplate.convertAndSend("/topic/pool/" + pool.getId(), Map.of(
+                            "event", "POOL_COMPLETED",
+                            "poolId", pool.getId(),
+                            "time", LocalDateTime.now().toString()));
+                }
+            }
         }
 
         stringRedis.delete(RedisKeyConstant.POOL_DETAIL_PREFIX + pool.getId());
